@@ -1,5 +1,5 @@
 # ============================================================================
-#  slacker — repository priorities & sources          (slackware64-15.0)
+#  slacker — repository priorities & sources          (slackware64-16.0)
 # ============================================================================
 #
 #  Format — one repo per line:
@@ -31,13 +31,13 @@
 #  More repos — uncomment, tune the priority to your needs, or add your own.
 #  (Append flags at the end if needed, e.g. immutable / verify=...)
 # ----------------------------------------------------------------------------
-#60         alienbob    https://slackware.nl/people/alien/sbrepos/15.0/x86_64
-#50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/15.0/x86_64
-#80         mate        https://slackware.uk/msb/15.0/1.28/x86_64
-#79         cbs         https://slackware.uk/csb/15.0/x86_64/
-#40         ponce       https://ponce.cc/slackware/slackware64-15.0/packages
-#30         slackpack   http://slackpack.ludost.net/packages/slackware64-15.0
-#10         multilib    https://slackware.nl/people/alien/multilib/15.0
+#60         alienbob    https://slackware.nl/people/alien/sbrepos/16.0/x86_64
+#50         restricted  https://slackware.nl/people/alien/restricted_sbrepos/16.0/x86_64
+#80         mate        https://slackware.uk/msb/16.0/1.28/x86_64
+#79         cbs         https://slackware.uk/csb/16.0/x86_64/
+#40         ponce       https://ponce.cc/slackware/slackware64-16.0/packages
+#30         slackpack   http://slackpack.ludost.net/packages/slackware64-16.0
+#10         multilib    https://slackware.nl/people/alien/multilib/16.0
 #
 # ----------------------------------------------------------------------------
 #  Flags reference
@@ -56,7 +56,7 @@
 #              repo ships a broken/missing checksum or signature, so you relax
 #              only that repo instead of weakening everything. Examples:
 #                100  slackware  mirror                                                   official  verify=gpg,md5
-#                60   alienbob   https://slackware.nl/people/alien/sbrepos/15.0/x86_64           verify=md5
+#                60   alienbob   https://slackware.nl/people/alien/sbrepos/16.0/x86_64           verify=md5
 #
 # ============================================================================
 #  Source / build-tag priorities
