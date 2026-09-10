@@ -1360,7 +1360,7 @@ fn show_plan(plan: &[PlanItem], frozen: &[String], protected: &[String]) {
 /// name plus any `aaa*` package (aaa_base, aaa_glibc-solibs, aaa_libraries, ...).
 const FOUNDATIONAL_LIBS: &[&str] = &[
     "glibc",
-    "glibc-solibs",
+    "aaa_glibc-solibs",
     "glibc-i18n",
     "icu4c",
     "openssl",
@@ -6442,14 +6442,12 @@ fn cmd_download(
 /// Core packages that must be upgraded FIRST, serially, in this order: the C
 /// runtime, then the very tools `upgradepkg` relies on to unpack and install the
 /// rest. Doing the whole tree before these are in step is how a dist-upgrade
-/// bricks a system. Both `glibc-solibs` spellings are covered (some releases ship
-/// `aaa_glibc-solibs`).
+/// bricks a system.
 /// Add mkinitrd in core packages as Patrick suggest in ChangeLog:
 /// Sat Aug 29 04:22:54 UTC 2026
 /// Install mkinitrd early because the kernel might need the latest version.
 const DIST_CRITICAL: &[&str] = &[
     "aaa_glibc-solibs",
-    "glibc-solibs",
     "pkgtools",
     "tar",
     "xz",
@@ -6908,7 +6906,7 @@ fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Result<Outcome
             ui::dim(
                 "  then: disk gate, save an escape kit (config backup + installed-set template), \
                  refresh metadata, fetch+verify core first, phase0 core \
-                 (glibc-solibs -> pkgtools/tar/xz/gzip/findutils), then install-new and the rest \
+                 (aaa_glibc-solibs -> pkgtools/tar/xz/gzip/findutils), then install-new and the rest \
                  staged in batches (download -> install -> delete), clean-system, a second \
                  upgrade-all+install-new, new-config, status, kernel/boot reminder. \
                  clean-system and the second pass are skipped if anything fails to install."
@@ -10535,7 +10533,7 @@ mod collect_tests {
         // Target repos after the transform: slackware(100) and patches(200).
         let db = PkgDb::for_test(
             vec![
-                av("glibc-solibs-2.41-x86_64-1", "slackware"),
+                av("aaa_glibc-solibs-2.41-x86_64-1", "slackware"),
                 av("xz-5.6.2-x86_64-1", "slackware"),
                 av("vlc-3.0.21-x86_64-1", "slackware"),
                 av("kernel-generic-6.6.30-x86_64-1", "patches"),
@@ -10544,10 +10542,10 @@ mod collect_tests {
             &[("slackware", 100), ("patches", 200)],
             Some(100),
         );
-        // Installed: old core (glibc-solibs, xz), a vlc that came from a now-disabled
+        // Installed: old core (aaa_glibc-solibs, xz), a vlc that came from a now-disabled
         // third-party repo (its build tag would outrank slackware), and an old kernel.
         let installed = vec![
-            pkg::PkgId::parse("glibc-solibs-2.33-x86_64-1").unwrap(),
+            pkg::PkgId::parse("aaa_glibc-solibs-2.33-x86_64-1").unwrap(),
             pkg::PkgId::parse("xz-5.2.5-x86_64-1").unwrap(),
             pkg::PkgId::parse("vlc-3.0.18-x86_64-1alien").unwrap(),
             pkg::PkgId::parse("kernel-generic-6.6.5-x86_64-1").unwrap(),
@@ -10557,7 +10555,7 @@ mod collect_tests {
         // Critical set is ordered per DIST_CRITICAL: glibc-solibs before xz; the
         // absent ones (pkgtools/tar/gzip/findutils) are simply skipped.
         let cnames: Vec<&str> = critical.iter().map(|p| p.pkg.id.name.as_str()).collect();
-        assert_eq!(cnames, vec!["glibc-solibs", "xz"]);
+        assert_eq!(cnames, vec!["aaa_glibc-solibs", "xz"]);
 
         // vlc is upgraded to slackware's version even though the installed copy
         // came from a higher-priority third-party source — the dist bypass.
@@ -11202,7 +11200,6 @@ mod foundational_tests {
     fn foundational_matches_aaa_prefix_and_list() {
         assert!(is_foundational("aaa_base"));
         assert!(is_foundational("aaa_glibc-solibs"));
-        assert!(is_foundational("glibc-solibs"));
         assert!(is_foundational("icu4c"));
         assert!(is_foundational("openssl"));
         assert!(!is_foundational("vlc"));
