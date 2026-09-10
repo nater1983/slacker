@@ -359,7 +359,7 @@ fn run(cli: &Cli) -> Result<Outcome, String> {
     if matches!(cli.command, Cmd::NewConfig) {
         ensure_privileged(&cli.command)?;
         let _lock = acquire_lock()?;
-        return cmd_new_config(cli);
+        return cmd_new_config(cli, false);
     }
     let cfg = Config::load_dir(&cli.config_dir)?;
     migrate_state(&cfg);
@@ -7112,19 +7112,46 @@ fn cmd_upgrade_dist(cli: &Cli, cfg: &Config, target_arg: &str) -> Result<Outcome
     // ---- Phase 5: merge .new config files ----
     println!();
     println!("{}", ui::blue("Phase 5 — config files (.new):"));
-    cmd_new_config(cli)?;
+    cmd_new_config(cli, true)?;
 
     // ---- Phase 6: final report ----
     println!();
     cmd_status(&cfg.config_dir)?;
 
     // ---- Boot reminder ----
+    // Follows the "before you reboot" section of Patrick's upgrade HOWTO: build
+    // the initrd first (geninitrd also refreshes grub.cfg), then reinstall
+    // whichever bootloader is in use. Getting this wrong is the one way a
+    // finished dist-upgrade still leaves an unbootable system.
     println!();
     println!("{}", ui::green(&format!("Distribution upgrade to {target_seg} complete.")));
+    println!("{}", ui::red("DO NOT REBOOT until the bootloader knows about the new kernel."));
     println!("{}", ui::blue("Before rebooting:"));
     println!(
+        "  1) {}  {}",
+        ui::white("geninitrd"),
+        ui::dim("— builds the initrd for the new kernel (and updates grub.cfg)")
+    );
+    println!("  2) {}", ui::white("reinstall your bootloader:"));
+    println!(
+        "       {}   {}",
+        ui::white("LILO:            lilo"),
+        ui::dim("(check /etc/lilo.conf points at a valid kernel first)")
+    );
+    println!("       {}", ui::white("GRUB (UEFI):     grub-install"));
+    println!(
+        "       {}   {}",
+        ui::white("GRUB (BIOS):     grub-install --target=i386-pc /dev/sda"),
+        ui::dim("(your boot disk)")
+    );
+    println!(
+        "       {}   {}",
+        ui::white("ELILO/UEFI:      eliloconfig"),
+        ui::dim("(installs kernel + initrd to the EFI System Partition)")
+    );
+    println!(
         "  {}",
-        ui::white("rebuild the initrd (mkinitrd) and reinstall the bootloader — lilo, or eliloconfig on UEFI")
+        ui::dim("booting from a USB stick? copy the new kernel onto it in place of the old one.")
     );
 
     // If a local mirror / ISO drove the upgrade, the active mirror now points at
@@ -8346,6 +8373,71 @@ fn hilite_keys(text: &str) -> String {
 /// Overwrite `target` with the `.new` file, first saving the existing `target`
 /// as `<target>.orig` (slackpkg-style), so the previous config stays recoverable.
 /// If a `.orig` already exists it is replaced (latest superseded config wins).
+/// Config files that are NEVER replaced wholesale by a `.new`, whatever the
+/// user answers.
+///
+/// These carry the system's identity and its network bring-up. The `etc` and
+/// `network-scripts` packages ship a `.new` for each on every upgrade, so they
+/// turn up in ordinary `-current` updates, not only in a dist-upgrade —
+/// overwriting `passwd`/`shadow`/`group` with the stock versions deletes every
+/// account and locks the user out, and a `.orig` backup is no help once login
+/// is impossible. Patrick's own 15.0→16.0 script skips exactly these five.
+///
+/// They are still reported and can be merged by hand (or with `M` in the
+/// per-file review, which edits rather than replaces).
+const PROTECTED_CONFIGS: &[&str] = &[
+    "/etc/passwd",
+    "/etc/shadow",
+    "/etc/group",
+    "/etc/rc.d/rc.inet1.conf",
+    "/etc/rc.d/rc.local",
+];
+
+fn is_protected_config(target: &std::path::Path) -> bool {
+    PROTECTED_CONFIGS.iter().any(|p| target == std::path::Path::new(p))
+}
+
+/// Warn about `.new` files that were deliberately left alone, naming them so the
+/// user knows there is still something to merge by hand.
+fn report_protected_skips(skipped: &[String]) {
+    if skipped.is_empty() {
+        return;
+    }
+    println!(
+        "{}",
+        ui::yellow(&format!(
+            "  {} identity/network file(s) NOT replaced — merge by hand:",
+            skipped.len()
+        ))
+    );
+    for s in skipped {
+        println!("      {}", ui::white(s));
+    }
+    println!(
+        "{}",
+        ui::dim(
+            "    replacing these wholesale deletes your accounts / network settings, \
+             so slacker never does it for you. Their .new files are left in place."
+        )
+    );
+}
+
+/// Install the `.new` and keep the previous file as `.bak`, as the script in
+/// Patrick's upgrade HOWTO does (`cp -a` then `mv`). A separate suffix from the
+/// `.orig` of the ordinary overwrite, so it is obvious which pass produced it.
+fn overwrite_with_bak(nc: &newconfig::NewConfig) -> Result<(), String> {
+    if nc.target.exists() {
+        let mut bak = nc.target.as_os_str().to_os_string();
+        bak.push(".bak");
+        let bak = std::path::PathBuf::from(bak);
+        std::fs::copy(&nc.target, &bak)
+            .map_err(|e| format!("back up {} -> {}: {e}", nc.target.display(), bak.display()))?;
+    }
+    std::fs::rename(&nc.new_file, &nc.target)
+        .map_err(|e| format!("install {}: {e}", nc.target.display()))?;
+    Ok(())
+}
+
 fn overwrite_with_orig(nc: &newconfig::NewConfig) -> Result<(), String> {
     if nc.target.exists() {
         let mut orig = nc.target.as_os_str().to_os_string();
@@ -8400,6 +8492,16 @@ fn review_one_config(nc: &newconfig::NewConfig, idx: usize, total: usize) -> Res
                 break;
             }
             "o" => {
+                if is_protected_config(&nc.target) {
+                    println!(
+                        "    {}",
+                        ui::yellow(
+                            "not replaced: this file carries your accounts or network setup — \
+                             use M to merge the parts you want."
+                        )
+                    );
+                    continue;
+                }
                 overwrite_with_orig(nc)?;
                 println!("    {}", ui::dim("overwritten with the new file (old saved as .orig)"));
                 break;
@@ -8434,7 +8536,12 @@ fn review_one_config(nc: &newconfig::NewConfig, idx: usize, total: usize) -> Res
     Ok(())
 }
 
-fn cmd_new_config(cli: &Cli) -> Result<Outcome, String> {
+/// `dist_mode` adds the "(A)ll new" bulk choice: install every `.new` and keep
+/// the previous file as `.bak`, the shape of the script in Patrick's upgrade
+/// HOWTO. It is offered only during `upgrade-dist`, where taking the target
+/// release's configs wholesale is a reasonable default; in ordinary use the
+/// answer is almost always to keep what you have.
+fn cmd_new_config(cli: &Cli, dist_mode: bool) -> Result<Outcome, String> {
     let found = newconfig::find_new_configs(&newconfig::default_roots());
     if found.is_empty() {
         println!("No .new configuration files found.");
@@ -8509,7 +8616,45 @@ fn cmd_new_config(cli: &Cli) -> Result<Outcome, String> {
         ui::blue(&format!("{} config file(s) differ from the new version:", conflicts.len()))
     );
     for (i, nc) in conflicts.iter().enumerate() {
-        println!("  {:>3}) {}", i + 1, ui::white(&nc.target.display().to_string()));
+        let name = ui::white(&nc.target.display().to_string());
+        if is_protected_config(&nc.target) {
+            println!("  {:>3}) {}  {}", i + 1, name, ui::red("← PROTECTED, will not be replaced"));
+        } else {
+            println!("  {:>3}) {}", i + 1, name);
+        }
+    }
+
+    // Say this BEFORE offering any choice: seeing /etc/shadow in a list with an
+    // "overwrite all" option next to it is alarming, and the user has no way to
+    // know it is exempt until after answering.
+    let protected: Vec<&newconfig::NewConfig> =
+        conflicts.iter().copied().filter(|nc| is_protected_config(&nc.target)).collect();
+    if !protected.is_empty() {
+        let bar = "=".repeat(66);
+        println!();
+        println!("{}", ui::red(&bar));
+        println!("{}", ui::red("  WARNING — these files carry your accounts and network setup:"));
+        for nc in &protected {
+            println!("{}{}", ui::red("    "), ui::white(&nc.target.display().to_string()));
+        }
+        println!(
+            "{}",
+            ui::red(
+                "  Replacing one wholesale deletes every account, or the network\n  \
+                 configuration that brings this machine online. slacker will NOT\n  \
+                 replace them, whatever you answer below."
+            )
+        );
+        println!(
+            "{}",
+            ui::red(
+                "  If you need something from the new version, merge it BY HAND:\n  \
+                 answer P, then M on that file — and be sure of the change before\n  \
+                 you make it. When in doubt, change nothing: keeping your current\n  \
+                 file is always the safe answer."
+            )
+        );
+        println!("{}", ui::red(&bar));
     }
 
     if cli.dry_run {
@@ -8533,18 +8678,18 @@ fn cmd_new_config(cli: &Cli) -> Result<Outcome, String> {
     // ---- Phase 2: one bulk choice for ALL files (slackpkg-style K/O/R/P) ----
     println!();
     loop {
+        let mut choices: Vec<(&str, &str)> = vec![
+            ("K", "eep current (.new left for later)"),
+            ("O", "verwrite all (old saved as .orig)"),
+            ("R", "emove all .new"),
+            ("P", "rompt one by one"),
+        ];
+        if dist_mode {
+            choices.push(("A", "ll new — take the release's configs (old saved as .bak)"));
+        }
         print!(
             "{} ",
-            choice_line(
-                &format!("ALL {} files:", conflicts.len()),
-                &[
-                    ("K", "eep current (.new left for later)"),
-                    ("O", "verwrite all (old saved as .orig)"),
-                    ("R", "emove all .new"),
-                    ("P", "rompt one by one"),
-                ],
-                "P",
-            )
+            choice_line(&format!("ALL {} files:", conflicts.len()), &choices, "P")
         );
         std::io::stdout().flush().ok();
         let mut line = String::new();
@@ -8564,7 +8709,12 @@ fn cmd_new_config(cli: &Cli) -> Result<Outcome, String> {
                     return Ok(Outcome::Ok);
                 }
                 let mut n = 0usize;
+                let mut skipped: Vec<String> = Vec::new();
                 for nc in &conflicts {
+                    if is_protected_config(&nc.target) {
+                        skipped.push(nc.target.display().to_string());
+                        continue;
+                    }
                     overwrite_with_orig(nc)?;
                     n += 1;
                 }
@@ -8574,6 +8724,40 @@ fn cmd_new_config(cli: &Cli) -> Result<Outcome, String> {
                         "overwrote {n} file(s) with the new versions (previous saved as .orig)."
                     ))
                 );
+                report_protected_skips(&skipped);
+                return Ok(Outcome::Ok);
+            }
+            "a" if dist_mode => {
+                // Patrick's HOWTO script: install every incoming config, keeping
+                // the previous one as .bak — minus the identity/network files,
+                // which his script skips too.
+                if !confirm(
+                    &format!(
+                        "Take the new release's version of all {} files (old saved as .bak)?",
+                        conflicts.len()
+                    ),
+                    false,
+                ) {
+                    println!("{}", ui::blue("cancelled — nothing changed."));
+                    return Ok(Outcome::Ok);
+                }
+                let mut n = 0usize;
+                let mut skipped: Vec<String> = Vec::new();
+                for nc in &conflicts {
+                    if is_protected_config(&nc.target) {
+                        skipped.push(nc.target.display().to_string());
+                        continue;
+                    }
+                    overwrite_with_bak(nc)?;
+                    n += 1;
+                }
+                println!(
+                    "{}",
+                    ui::green(&format!(
+                        "installed {n} new config file(s); the previous ones are alongside as .bak."
+                    ))
+                );
+                report_protected_skips(&skipped);
                 return Ok(Outcome::Ok);
             }
             "k" => {
@@ -11195,6 +11379,26 @@ mod freshness_tests {
 #[cfg(test)]
 mod foundational_tests {
     use super::*;
+
+    #[test]
+    fn identity_and_network_configs_are_never_auto_replaced() {
+        use std::path::Path;
+        // These carry the accounts and the network bring-up. The `etc` and
+        // `network-scripts` packages ship a .new for each on ordinary upgrades,
+        // so "overwrite all" must never take them: replacing /etc/passwd and
+        // /etc/shadow with the stock versions locks the user out, and the .orig
+        // backup is useless once login is impossible.
+        for p in ["/etc/passwd", "/etc/shadow", "/etc/group", "/etc/rc.d/rc.inet1.conf", "/etc/rc.d/rc.local"] {
+            assert!(is_protected_config(Path::new(p)), "{p} must be protected");
+        }
+        // Everything else is fair game for an overwrite.
+        for p in ["/etc/fstab", "/etc/slackpkg/mirrors", "/usr/share/vim/vimrc", "/etc/passwd.d/x"] {
+            assert!(!is_protected_config(Path::new(p)), "{p} must not be protected");
+        }
+        // Match is on the resolved target path, not a suffix: a same-named file
+        // elsewhere is not protected.
+        assert!(!is_protected_config(Path::new("/home/user/passwd")));
+    }
 
     #[test]
     fn foundational_matches_aaa_prefix_and_list() {

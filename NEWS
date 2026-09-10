@@ -1,3 +1,21 @@
+- Update: cmd:slacker new-config
+    - the five files Patrick's upgrade HOWTO skips — /etc/passwd, /etc/shadow,
+      /etc/group, /etc/rc.d/rc.inet1.conf and /etc/rc.d/rc.local — are never
+      replaced by their .new, whatever is answered. Replacing them wholesale
+      deletes every account or the network configuration, and the .orig backup
+      is no help once login is impossible. They are flagged in the list and a
+      warning explains what to do instead (merge by hand with P then M); their
+      .new files are left in place.
+
+- Update: cmd:slacker upgrade-dist
+    - `new-config` gains an "(A)ll new" choice during a dist-upgrade only:
+      install every incoming config and keep the previous one as .bak, the
+      shape of the script in Patrick's HOWTO. The protected five are skipped
+      there too.
+    - the pre-reboot REMINDER (slacker does not run any of these itself) now
+      follows the 15.0 -> 16.0 HOWTO: geninitrd first (it also updates
+      grub.cfg), then lilo / grub-install (UEFI and BIOS) / eliloconfig, and a
+      note for USB-stick booting.
 - Fix: typos in main.rs
 ---
 
