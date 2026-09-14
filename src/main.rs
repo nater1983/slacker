@@ -8370,31 +8370,47 @@ fn hilite_keys(text: &str) -> String {
     out
 }
 
-/// Overwrite `target` with the `.new` file, first saving the existing `target`
-/// as `<target>.orig` (slackpkg-style), so the previous config stays recoverable.
-/// If a `.orig` already exists it is replaced (latest superseded config wins).
-/// Config files that are NEVER replaced wholesale by a `.new`, whatever the
-/// user answers.
+/// Config files that are NEVER replaced wholesale by a `.new`, whatever the user
+/// answers, each with the reason it is exempt.
 ///
-/// These carry the system's identity and its network bring-up. The `etc` and
-/// `network-scripts` packages ship a `.new` for each on every upgrade, so they
-/// turn up in ordinary `-current` updates, not only in a dist-upgrade —
-/// overwriting `passwd`/`shadow`/`group` with the stock versions deletes every
-/// account and locks the user out, and a `.orig` backup is no help once login
-/// is impossible. Patrick's own 15.0→16.0 script skips exactly these five.
+/// They hold settings unique to this machine, and the `etc` and
+/// `network-scripts` packages ship a `.new` for each on every upgrade — so they
+/// turn up in ordinary `-current` updates, not only in a dist-upgrade.
+/// Patrick's own 15.0→16.0 script skips exactly these five.
+///
+/// The reason is carried per file rather than described in one sentence,
+/// because the five are NOT one kind of thing: three are the account database,
+/// one is the network bring-up, and `rc.local` is the user's own start-up
+/// commands. Saying "accounts and network setup" about `rc.local` is simply
+/// untrue, and a warning the reader can see is wrong is a warning they stop
+/// reading.
 ///
 /// They are still reported and can be merged by hand (or with `M` in the
 /// per-file review, which edits rather than replaces).
-const PROTECTED_CONFIGS: &[&str] = &[
-    "/etc/passwd",
-    "/etc/shadow",
-    "/etc/group",
-    "/etc/rc.d/rc.inet1.conf",
-    "/etc/rc.d/rc.local",
+const PROTECTED_CONFIGS: &[(&str, &str)] = &[
+    ("/etc/passwd", "your user accounts — replacing it deletes every account on this system"),
+    ("/etc/shadow", "the passwords for those accounts — replacing it locks everyone out"),
+    ("/etc/group", "your groups and their members — replacing it drops every membership"),
+    (
+        "/etc/rc.d/rc.inet1.conf",
+        "your network configuration — replacing it can leave this machine offline",
+    ),
+    (
+        "/etc/rc.d/rc.local",
+        "your own start-up commands — replacing it discards everything you put there",
+    ),
 ];
 
 fn is_protected_config(target: &std::path::Path) -> bool {
-    PROTECTED_CONFIGS.iter().any(|p| target == std::path::Path::new(p))
+    protected_reason(target).is_some()
+}
+
+/// Why `target` is exempt, or `None` if it is an ordinary config.
+fn protected_reason(target: &std::path::Path) -> Option<&'static str> {
+    PROTECTED_CONFIGS
+        .iter()
+        .find(|(p, _)| target == std::path::Path::new(p))
+        .map(|(_, why)| *why)
 }
 
 /// Warn about `.new` files that were deliberately left alone, naming them so the
@@ -8406,19 +8422,19 @@ fn report_protected_skips(skipped: &[String]) {
     println!(
         "{}",
         ui::yellow(&format!(
-            "  {} identity/network file(s) NOT replaced — merge by hand:",
+            "  {} file(s) NOT replaced — they hold settings unique to this machine:",
             skipped.len()
         ))
     );
     for s in skipped {
         println!("      {}", ui::white(s));
+        if let Some(why) = protected_reason(std::path::Path::new(s)) {
+            println!("{}", ui::dim(&format!("          {why}")));
+        }
     }
     println!(
         "{}",
-        ui::dim(
-            "    replacing these wholesale deletes your accounts / network settings, \
-             so slacker never does it for you. Their .new files are left in place."
-        )
+        ui::dim("    slacker never replaces these. Their .new files are left in place.")
     );
 }
 
@@ -8438,6 +8454,9 @@ fn overwrite_with_bak(nc: &newconfig::NewConfig) -> Result<(), String> {
     Ok(())
 }
 
+/// Overwrite `target` with the `.new` file, first saving the existing `target`
+/// as `<target>.orig` (slackpkg-style), so the previous config stays recoverable.
+/// If a `.orig` already exists it is replaced (latest superseded config wins).
 fn overwrite_with_orig(nc: &newconfig::NewConfig) -> Result<(), String> {
     if nc.target.exists() {
         let mut orig = nc.target.as_os_str().to_os_string();
@@ -8492,13 +8511,13 @@ fn review_one_config(nc: &newconfig::NewConfig, idx: usize, total: usize) -> Res
                 break;
             }
             "o" => {
-                if is_protected_config(&nc.target) {
+                if let Some(why) = protected_reason(&nc.target) {
                     println!(
                         "    {}",
-                        ui::yellow(
-                            "not replaced: this file carries your accounts or network setup — \
-                             use M to merge the parts you want."
-                        )
+                        ui::yellow(&format!(
+                            "not replaced — this file holds {why}. Use M to merge \
+                             the parts you want."
+                        ))
                     );
                     continue;
                 }
@@ -8633,17 +8652,20 @@ fn cmd_new_config(cli: &Cli, dist_mode: bool) -> Result<Outcome, String> {
         let bar = "=".repeat(66);
         println!();
         println!("{}", ui::red(&bar));
-        println!("{}", ui::red("  WARNING — these files carry your accounts and network setup:"));
+        println!("{}", ui::red("  WARNING — these files hold settings unique to this machine:"));
+        // The reason comes from the file itself: the five are not one kind of
+        // thing, and a blanket "accounts and network" is plainly wrong for
+        // rc.local — which is exactly the sort of error that teaches a reader to
+        // skip warnings.
         for nc in &protected {
             println!("{}{}", ui::red("    "), ui::white(&nc.target.display().to_string()));
+            if let Some(why) = protected_reason(&nc.target) {
+                println!("{}", ui::red(&format!("        {why}")));
+            }
         }
         println!(
             "{}",
-            ui::red(
-                "  Replacing one wholesale deletes every account, or the network\n  \
-                 configuration that brings this machine online. slacker will NOT\n  \
-                 replace them, whatever you answer below."
-            )
+            ui::red("  slacker will NOT replace them, whatever you answer below.")
         );
         println!(
             "{}",
@@ -11398,6 +11420,24 @@ mod foundational_tests {
         // Match is on the resolved target path, not a suffix: a same-named file
         // elsewhere is not protected.
         assert!(!is_protected_config(Path::new("/home/user/passwd")));
+
+        // Every exempt file states its OWN reason. The five are not one kind of
+        // thing — three are the account database, one is the network bring-up,
+        // and rc.local is the user's own start-up commands — so a blanket
+        // "accounts and network setup" would be visibly untrue for rc.local, and
+        // a warning a reader can see is wrong is one they stop reading.
+        for (path, why) in PROTECTED_CONFIGS {
+            assert!(!why.is_empty(), "{path} needs a reason");
+            assert_eq!(protected_reason(Path::new(path)), Some(*why));
+        }
+        assert!(protected_reason(Path::new("/etc/rc.d/rc.local"))
+            .unwrap()
+            .contains("start-up commands"));
+        assert!(protected_reason(Path::new("/etc/rc.d/rc.inet1.conf"))
+            .unwrap()
+            .contains("network"));
+        assert!(protected_reason(Path::new("/etc/passwd")).unwrap().contains("accounts"));
+        assert_eq!(protected_reason(Path::new("/etc/fstab")), None);
     }
 
     #[test]

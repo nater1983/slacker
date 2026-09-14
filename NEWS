@@ -1,3 +1,5 @@
+- Update: cmd:slackernew-config
+    - give each protected file its own reason (cosmetic fix previous commit)
 - Update: cmd:slacker new-config
     - the five files Patrick's upgrade HOWTO skips — /etc/passwd, /etc/shadow,
       /etc/group, /etc/rc.d/rc.inet1.conf and /etc/rc.d/rc.local — are never
