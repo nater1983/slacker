@@ -1,3 +1,5 @@
+Version Beta 0.11.9
+=====
 - Update: cmd:slackernew-config
     - give each protected file its own reason (cosmetic fix previous commit)
 - Update: cmd:slacker new-config
