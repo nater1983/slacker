@@ -20,12 +20,49 @@ mod window;
 #[cfg(test)]
 mod install_tests;
 
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::MetadataExt;
+
+    /// `/proc/self` is owned by the effective uid: a file this process
+    /// creates gets the same owner.
+    #[test]
+    fn proc_self_owner_is_the_effective_uid() {
+        let dir = std::env::temp_dir().join(format!("slacker-gui-uid-{}", std::process::id()));
+        std::fs::write(&dir, b"x").unwrap();
+        let file_uid = std::fs::metadata(&dir).unwrap().uid();
+        let _ = std::fs::remove_file(&dir);
+        assert_eq!(super::effective_uid(), Some(file_uid));
+    }
+}
+
 use adw::prelude::*;
 use gtk::{gdk, glib};
 
 const APP_ID: &str = "nl.slackware.forge.rizitis.SlackerGui";
 
+/// Shown when the GUI is started as root (e.g. `sudo slacker-gui`).
+const ROOT_REFUSAL: &str = "slacker-gui: do not run this as root.\n\
+Start Slacker GUI as your normal user. Read-only views run as you, and only\n\
+the actions that change the system run as root, through pkexec, after asking\n\
+for the password. For root work in a terminal, use slacker itself.";
+
+/// The effective user id, read from the owner of `/proc/self` (no extra
+/// dependency). None if `/proc` is not available.
+fn effective_uid() -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::metadata("/proc/self").ok().map(|m| m.uid())
+}
+
 fn main() -> glib::ExitCode {
+    // As root the whole GTK stack would run privileged, pkexec would stop
+    // asking for a password, and GTK would write root-owned files into the
+    // session. Refuse before touching the display.
+    if effective_uid() == Some(0) {
+        eprintln!("{ROOT_REFUSAL}");
+        return glib::ExitCode::FAILURE;
+    }
+
     let app = adw::Application::builder().application_id(APP_ID).build();
     app.connect_startup(|_| {
         // Installed as hicolor/*/apps/<APP_ID>; used by X11 window managers.
