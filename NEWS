@@ -4,7 +4,7 @@
       according to SBo standards which is our goal when slackware-16.0 comes.
     - However, those who build slacker themselves should know that it has been designed to work in `/usr/local/{sbin,bin}` as well as in `/usr/{bin,sbin}`
       so in any of the 4 paths it will be fine!
-- Add: slacker-gui, because why not?
+- Add: slacker-gui, (OPTIONAL) because why not?
     - GTK4/libadwaita front-end for slacker. It contains no package logic:
     - it runs the slacker binary, reads what slacker prints, and lays it out.
     - Nothing from slacker code was touched and nothing will be. The real slacker lives in cli.
