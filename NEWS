@@ -1,4 +1,23 @@
-
+- SEMANTIC CHANGES: We don't like this but it has to be done...
+    - So, slacker in the binaries produced by this repository is moving from `/usr/local/sbin` which has been in `/usr/bin/` until now.
+      There are many reasons and against my will. But it has to go there instead of `/usr/local/bin` so that we can prepare it
+      according to SBo standards which is our goal when slackware-16.0 comes.
+    - However, those who build slacker themselves should know that it has been designed to work in `/usr/local/{sbin,bin}` as well as in `/usr/{bin,sbin}`
+      so in any of the 4 paths it will be fine!
+- Add: slacker-gui, because why not?
+    - GTK4/libadwaita front-end for slacker. It contains no package logic:
+    - it runs the slacker binary, reads what slacker prints, and lays it out.
+    - Nothing from slacker code was touched and nothing will be. The real slacker lives in cli.
+    - Requirements: Everything exist in a stock Slackware-current installation:
+      1. GTK >= 4.0, libadwaita >= 1.5 (the development branch ships 1.9),
+      2. gtk4-rs 0.10 / libadwaita-rs 0.8, rustc >= 1.83,
+      3. A polkit authentication agent in the session.
+    - Note: slacker-gui freeze it`s version when slacker freezing, so from now on:
+      `0.12.0` <-- belongs to slacker AND to slacker-gui belong --> `_beta_1`
+    - That said, hopefully when slackware-16.0 released slacker will freeze --> `slacker-16.0_RC_0`
+      and in few days will be a ready and stable `slacker-16.0`
+- Update: Rearrange folders and repository structure:
+    - For obvious reasons, there was a major rearrangement...
 ---
 
 Version Beta 0.11.9

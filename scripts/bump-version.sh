@@ -39,8 +39,8 @@ fi
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 root="$(dirname "$script_dir")"
 
-cargo_toml="$root/Cargo.toml"
-man_page="$root/man/slacker.8"
+cargo_toml="$root/slacker-cli/Cargo.toml"
+man_page="$root/slacker-cli/man/slacker.8"
 slackbuild="$root/slacker.SlackBuild"
 
 # Read the current version from Cargo.toml (source of truth).

@@ -5,8 +5,10 @@
 #
 cd $(dirname $0) ; CWD=$(pwd)
 
+set -e
+
 PRGNAM=slacker
-VERSION=${VERSION:-0.11.9}
+VERSION=${VERSION:-0.12.0}
 BUILD=${BUILD:-1}
 TAG=${TAG:-_FRG}
 PKGTYPE=${PKGTYPE:-txz}
@@ -48,7 +50,10 @@ set -e
 rm -rf $PKG $TMP
 mkdir -p $TMP $PKG $OUTPUT
 cd $TMP
-cp -R $CWD/* .
+
+# First build slacker-cli (the original slacker)
+
+cp -R $CWD/slacker-cli/* .
 rm -rf target || true
 chown -R root:root .
 find . -type f \( -perm -4000 -o -perm -2000 \) -exec chmod -s {} +
@@ -78,14 +83,14 @@ python3 contrib/gen-completions.py --check
 # every mutating command must stay unattended under --yes (container safety)
 bash contrib/check-yes-noninteractive.sh target/release/slacker
 
-mkdir -p $PKG/usr/local/sbin
-install -m0755 target/release/slacker $PKG/usr/local/sbin/slacker
+mkdir -p $PKG/usr/bin
+install -m0755 target/release/slacker $PKG/usr/bin/slacker
 
 find $PKG | xargs file | grep -e "executable" -e "shared object" | grep ELF | cut -f 1 -d : | xargs strip --strip-unneeded 2> /dev/null
 
 # docs
 mkdir -p $PKG/usr/doc/$PRGNAM-$VERSION/CONF
-install -m0644 README.md NEWS $PKG/usr/doc/$PRGNAM-$VERSION/
+install -m0644 $CWD/README.md $CWD/NEWS $PKG/usr/doc/$PRGNAM-$VERSION/
 install -m0644 CONF/etc-slacker/"$DIR"/"$ARCH"/* $PKG/usr/doc/$PRGNAM-$VERSION/CONF/
 cat $CWD/$PRGNAM.SlackBuild > $PKG/usr/doc/$PRGNAM-$VERSION/$PRGNAM.SlackBuild
 
@@ -133,6 +138,20 @@ mkdir -p $PKG/usr/share/fish/vendor_completions.d
 install -m0644 contrib/slacker.fish \
   $PKG/usr/share/fish/vendor_completions.d/slacker.fish
 
+# Now we build slacker-gui on top of slacker
+pushd $CWD/slacker-gui || exit 1
+cargo build --release
+cargo test --release
+
+install -Dm755 target/release/slacker-gui $PKG/usr/bin/slacker-gui
+install -Dm644 data/nl.slackware.forge.rizitis.SlackerGui.desktop \
+  $PKG/usr/share/applications/nl.slackware.forge.rizitis.SlackerGui.desktop
+install -Dm644 data/nl.slackware.forge.rizitis.slacker.policy \
+  $PKG/usr/share/polkit-1/actions/nl.slackware.forge.rizitis.slacker.policy
+mkdir -p $PKG/usr/share/icons
+cp -a data/icons/hicolor $PKG/usr/share/icons/
+popd || exit 1
+
 # Copy the slack-desc and a custom doinst.sh
 mkdir -p $PKG/install
 cat $CWD/slack-desc > $PKG/install/slack-desc
@@ -140,5 +159,6 @@ cat $CWD/doinst.sh > $PKG/install/doinst.sh
 
 cd $PKG
 /sbin/makepkg -l y -c n $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE
+
 #sleep 1
 #gpg --detach-sign --armor $OUTPUT/$PRGNAM-$VERSION-$ARCH-$BUILD$TAG.$PKGTYPE

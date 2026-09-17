@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Slacker
+GenericName=Package Manager
+Comment=Search, install and upgrade Slackware packages with slacker
+Exec=slacker-gui
+Icon=nl.slackware.forge.rizitis.SlackerGui
+Terminal=false
+StartupNotify=true
+StartupWMClass=slacker-gui
+Categories=System;PackageManager;GTK;
+Keywords=package;update;upgrade;install;slackware;
