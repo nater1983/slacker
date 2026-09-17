@@ -1,5 +1,3 @@
----
-
 ![slacker](slacker-banner.svg)
 
 
