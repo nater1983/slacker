@@ -91,6 +91,8 @@ slacker upgrade-all
 
 ## slacker-gui -- GTK4/libadwaita front-end for slacker
 
+> slacker-gui is **OPTIONAL**
+
 It contains no package logic: it
 runs the slacker binary, reads what slacker prints, and lays it out.
 
