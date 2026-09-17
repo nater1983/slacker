@@ -96,7 +96,7 @@ slacker upgrade-all
 It contains no package logic: it
 runs the slacker binary, reads what slacker prints, and lays it out.
 
-![repos](./slacker-gui/dev-docs/slacker-gui.png)
+![repos](./slacker-gui/dev-docs/slacker-2.png)
 
 
 ---
