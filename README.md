@@ -124,17 +124,20 @@ report what you find:
 
 ## Acknowledgements
 
-* [Patrick Volkerding](http://www.slackware.com/~volkerdi/) For Slackware and for pkgtools that slacker use.
-* [Eric Hameleers](https://forge.slackware.nl/forgeadmin) For hosting and maintain `https://forge.slackware.nl`(slacker`s home), slacker use his repos and packages.
-* [Darren Austin](https://slackware.uk/cumulative/) For hosting slackware.uk, slacker use `https://slackware.uk/cumulative/` repo.
-* [Nathaniel Russell](https://forge.slackware.nl/n4t3r) For `https://reddoglinux.ddns.net/` slacker use his repos and packages.
-* [Jay Lanagan](https://slackware.lngn.net/) slacker use his repo and packages for current repo `https://slackware.lngn.net/pub/x86_64/slackware64-current/`
-* [Corrado Franco](https://forge.slackware.nl/conraid) For requests and all the bug reports. slacker use his repo and packages for current.
-* [Willy Sudiarto Raharjo ](https://github.com/willysr) slacker use his packages for MATE and Cinnamon hosted in `https://slackware.uk` for stable.
-* [Georgi Sotirov](https://sotirov-bg.net/slackpack/about.cgi?q=site) slacker use his slackpack repos and packages for stable.
-* [Matteo Bernardini ](https://slackware.ponce.cc/blog/) slacker use his packages.
-* [Danilo Macrì](https://forge.slackware.nl/danix) For Pull Requests (shell-completions for slacker) and bug reports.
+* [Patrick Volkerding](http://www.slackware.com/~volkerdi/) - For Slackware and for pkgtools that slacker use.
+* [Eric Hameleers](https://forge.slackware.nl/forgeadmin) - For hosting and maintain `https://forge.slackware.nl`(slacker`s home), slacker use his repos and packages.
+* [Darren Austin](https://slackware.uk/cumulative/) - For hosting slackware.uk, slacker use `https://slackware.uk/cumulative/` repo.
+* [Nathaniel Russell](https://forge.slackware.nl/n4t3r) - For `https://reddoglinux.ddns.net/` slacker use his repos and packages.
+* [Jay Lanagan](https://slackware.lngn.net/) - slacker use his repo and packages for current repo `https://slackware.lngn.net/pub/x86_64/slackware64-current/`
+* [Corrado Franco](https://forge.slackware.nl/conraid) - For requests and all the bug reports. slacker use his repo and packages for current.
+* [Willy Sudiarto Raharjo ](https://github.com/willysr) - slacker use his packages for MATE and Cinnamon hosted in `https://slackware.uk` for stable.
+* [Georgi Sotirov](https://sotirov-bg.net/slackpack/about.cgi?q=site) - slacker use his slackpack repos and packages for stable.
+* [Matteo Bernardini ](https://slackware.ponce.cc/blog/) - slacker use his repo and packages.
+* [Danilo Macrì](https://forge.slackware.nl/danix) - For Pull Requests (shell-completions for slacker) and bug reports.
 * My real friend **@gcosbug** for the code oversight, the fixes and the endless time he has put in...
+
+> slacker is dedicated to the memory of my good friend from France Didier Spaier. Who was the creator and maintainer of Slint Linux.
+> Καλή ανάπαυση στην ψυχή και καλή ανάσταση φίλε...
 
 ---
 
