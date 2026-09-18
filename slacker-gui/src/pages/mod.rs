@@ -3,6 +3,7 @@
 
 use std::rc::Rc;
 
+pub mod changelog;
 pub mod history;
 pub mod mirrors;
 pub mod overview;

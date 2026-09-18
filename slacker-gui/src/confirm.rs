@@ -152,8 +152,8 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
 
     let dialog = adw::Dialog::builder()
         .title(glib::markup_escape_text(&action.title))
-        .content_width(760)
-        .content_height(540)
+        .content_width(980)
+        .content_height(660)
         .can_close(false)
         .child(&view)
         .build();
@@ -285,10 +285,23 @@ fn show_preview(
                 .xalign(0.0)
                 .build();
             l.add_css_class("command-line");
+            l.set_wrap(false);
             // Selectable with the mouse; never the initial focus, so it does
             // not open fully selected.
             l.set_focusable(false);
-            extra.append(&l);
+            // Long plans scroll instead of squeezing the dialog.
+            // The dialog itself cannot be given a width (AdwAlertDialog has no
+            // usable content width), so the plan's own box asks for the room:
+            // one package per line, scrolling instead of wrapping.
+            let scroller = gtk::ScrolledWindow::builder()
+                .child(&l)
+                .width_request(700)
+                .min_content_height(240)
+                .max_content_height(420)
+                .hscrollbar_policy(gtk::PolicyType::Automatic)
+                .vscrollbar_policy(gtk::PolicyType::Automatic)
+                .build();
+            extra.append(&scroller);
         }
         match verdict {
             Verdict::Ready | Verdict::Override(_) => {
@@ -369,6 +382,20 @@ pub fn judge_pin(text: &str) -> Verdict {
     }
 }
 
+/// Judges `install-new --dry-run` and `upgrade-all --dry-run`.
+pub fn judge_plan(text: &str) -> Verdict {
+    if text.contains("(dry-run: nothing changed)") {
+        Verdict::Ready
+    } else if text.contains("No new packages to install")
+        || text.contains("Nothing to upgrade")
+        || text.contains("Nothing selected")
+    {
+        Verdict::Nothing
+    } else {
+        Verdict::Failed
+    }
+}
+
 /// Judges `slacker pri-repo PRIORITY NAME` run without `--yes`. A taken
 /// priority or an unknown repo is an error exit, reported as Failed with
 /// slacker's own message.
@@ -407,6 +434,17 @@ mod tests {
         assert!(matches!(judge_pin(PIN_FROZEN), Verdict::Override(_)));
         assert!(matches!(judge_pin("Already pinned: vlc -> alienbob\n"), Verdict::Nothing));
         assert!(matches!(judge_pin("slacker: error: no active repo 'x'"), Verdict::Failed));
+    }
+
+    #[test]
+    fn plan_verdicts() {
+        assert!(matches!(
+            judge_plan("Upgrade (2):\n  glibc  2.44-4 \u{2192} 2.44-5\n(dry-run: nothing changed)\n"),
+            Verdict::Ready
+        ));
+        assert!(matches!(judge_plan("No new packages to install.\n"), Verdict::Nothing));
+        assert!(matches!(judge_plan("Nothing to upgrade.\n"), Verdict::Nothing));
+        assert!(matches!(judge_plan("slacker: error: could not read metadata"), Verdict::Failed));
     }
 
     #[test]

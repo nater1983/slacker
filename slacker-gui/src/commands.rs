@@ -78,6 +78,15 @@ pub fn find_mirror() -> Spec {
     user(&["find-mirror"])
 }
 
+/// `show-changelog [REPO]`: the official (tracked) repo when no name is
+/// given. Always fetched fresh, so it needs the network.
+pub fn show_changelog(repo: Option<&str>) -> Spec {
+    match repo {
+        Some(r) => user(&["show-changelog", r]),
+        None => user(&["show-changelog"]),
+    }
+}
+
 pub fn check_updates() -> Spec {
     user(&["check-updates"])
 }
@@ -159,6 +168,16 @@ pub fn install_new() -> Spec {
     root(&["install-new"], &[])
 }
 
+/// The plan of `install-new` / `upgrade-all` without touching anything.
+/// Unlike `frozen` and `pin`, these commands do read `--dry-run`.
+pub fn install_new_preview() -> Spec {
+    root_query(&["install-new", "--dry-run"])
+}
+
+pub fn upgrade_all_preview() -> Spec {
+    root_query(&["upgrade-all", "--dry-run"])
+}
+
 pub fn upgrade_all() -> Spec {
     root(&["upgrade-all"], &[])
 }
@@ -233,12 +252,26 @@ mod tests {
             list_repos(),
             check_updates(),
             find_mirror(),
+            show_changelog(None),
+            show_changelog(Some("conraid")),
             history_recent(10),
             history_installed(),
         ] {
             assert_eq!(s.privilege, Privilege::User);
             assert!(!s.args.iter().any(|a| a == "--yes"));
         }
+    }
+
+    #[test]
+    fn plan_previews_are_dry_runs_without_yes() {
+        for s in [install_new_preview(), upgrade_all_preview()] {
+            assert_eq!(s.privilege, Privilege::Root);
+            assert!(s.args.contains(&"--dry-run".to_string()));
+            assert!(!s.args.iter().any(|a| a == "--yes"));
+        }
+        assert_eq!(upgrade_all_preview().args, vec!["upgrade-all", "--dry-run"]);
+        assert_eq!(show_changelog(None).args, vec!["show-changelog"]);
+        assert_eq!(show_changelog(Some("conraid")).args, vec!["show-changelog", "conraid"]);
     }
 
     #[test]

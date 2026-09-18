@@ -36,6 +36,7 @@ pub fn build(app: &adw::Application) {
         pages::overview::page(&ctx, &resolved),
         pages::search::page(&ctx),
         pages::updates::page(&ctx),
+        pages::changelog::page(&ctx),
         pages::packages::page(&ctx),
         pages::repositories::page(&ctx),
         pages::mirrors::page(&ctx),

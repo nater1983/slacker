@@ -6,7 +6,7 @@ use adw::prelude::*;
 
 use super::Page;
 use crate::commands::{self, Spec};
-use crate::confirm::{self, Action};
+use crate::confirm::{self, Action, Previewed};
 use crate::ctx::Ctx;
 use crate::parse::updates::{self, State};
 use crate::runner::Status;
@@ -18,8 +18,12 @@ pub fn page(ctx: &Ctx) -> Page {
     let summary = gtk::Box::new(gtk::Orientation::Vertical, 0);
     body.append(&summary);
 
-    // Actions, in the order slacker recommends them.
-    let actions = widgets::group("Actions", "Run in this order: refresh the lists, add new packages, then upgrade.");
+    // What to do, in the order slacker recommends. Kept separate from the
+    // report above: fetching the lists installs nothing by itself.
+    let actions = widgets::group(
+        "What to do",
+        "In this order. Updating the lists only fetches what the repositories published; the packages on this system change in steps 2 and 3.",
+    );
     body.append(&actions);
 
     let repos = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -79,47 +83,67 @@ pub fn page(ctx: &Ctx) -> Page {
         })
     };
 
-    let add_action = |title: &str, subtitle: &str, icon: &str, verb: &str, spec: fn() -> Spec, primary: bool| {
+    let add_action = |step: i32,
+                      title: &str,
+                      subtitle: &str,
+                      verb: &str,
+                      spec: fn() -> Spec,
+                      preview: Option<fn() -> Spec>,
+                      primary: bool| {
         let row = widgets::row(title, subtitle);
-        row.add_prefix(&widgets::tile(icon, if primary { Some("accent") } else { None }));
+        row.add_prefix(&widgets::priority_badge(step, primary));
         let b = widgets::row_button(verb, if primary { Some("suggested-action") } else { None });
         ctx.runner.watch(&b);
         let (ctx2, after2, title2, verb2) = (ctx.clone(), after.clone(), title.to_string(), verb.to_string());
         b.connect_clicked(move |_| {
             let after3 = after2.clone();
             let label = title2.clone();
-            confirm::run_as_root(
-                &ctx2,
-                Action { spec: spec(), title: title2.clone(), verb: verb2.clone(), destructive: false },
-                move |st| after3(st, &label),
-            );
+            let action = Action {
+                spec: spec(),
+                title: title2.clone(),
+                verb: verb2.clone(),
+                destructive: false,
+            };
+            match preview {
+                // slacker lists exactly what it would install or upgrade
+                // before anything is written.
+                Some(p) => confirm::run_previewed(
+                    &ctx2,
+                    Previewed { preview: p(), action, judge: confirm::judge_plan },
+                    move |st| after3(st, &label),
+                ),
+                None => confirm::run_as_root(&ctx2, action, move |st| after3(st, &label)),
+            }
         });
         row.add_suffix(&b);
         row.set_activatable_widget(Some(&b));
         actions.add(&row);
     };
     add_action(
-        "Refresh package lists",
-        "Download the latest metadata from every repository.",
-        "folder-download-symbolic",
+        1,
+        "Update the package lists",
+        "Fetch what the repositories have published. Nothing is installed, removed or upgraded by this step.",
         "Update",
         commands::update,
+        None,
         false,
     );
     add_action(
+        2,
         "Install new packages",
-        "Add packages the official repositories now ship that are not installed yet.",
-        "list-add-symbolic",
+        "Packages the official repositories added and this system does not have. slacker lists them before installing.",
         "Install new",
         commands::install_new,
+        Some(commands::install_new_preview),
         false,
     );
     add_action(
+        3,
         "Upgrade all",
-        "Install every newer revision of installed packages.",
-        "software-update-available-symbolic",
+        "Installed packages that have a newer build. slacker lists them before upgrading.",
         "Upgrade all",
         commands::upgrade_all,
+        Some(commands::upgrade_all_preview),
         true,
     );
 
@@ -153,13 +177,13 @@ fn summary_card(status: &Status, parsed: &updates::Updates) -> gtk::Box {
     } else if pending > 0 {
         (
             "attention",
-            "software-update-available-symbolic",
+            "folder-download-symbolic",
             if pending == 1 {
-                "Updates available in 1 repository".to_string()
+                "1 repository has published new data".to_string()
             } else {
-                format!("Updates available in {pending} repositories")
+                format!("{pending} repositories have published new data")
             },
-            "Refresh the package lists, then upgrade.".to_string(),
+            "Update the package lists (step 1), then steps 2 and 3.".to_string(),
         )
     } else if broken > 0 {
         (
@@ -172,8 +196,11 @@ fn summary_card(status: &Status, parsed: &updates::Updates) -> gtk::Box {
         (
             "good",
             "object-select-symbolic",
-            "Everything is up to date".to_string(),
-            format!("{} repositories checked.", parsed.repos.len()),
+            "The package lists are current".to_string(),
+            format!(
+                "{} repositories checked. This says nothing about installed packages: steps 2 and 3 show what is still pending.",
+                parsed.repos.len()
+            ),
         )
     };
 
@@ -199,12 +226,15 @@ fn summary_card(status: &Status, parsed: &updates::Updates) -> gtk::Box {
 }
 
 fn repo_group(parsed: &updates::Updates) -> adw::PreferencesGroup {
-    let g = widgets::group("Repositories", "Highest priority first");
+    let g = widgets::group(
+        "Repository data",
+        "Whether each repository has published anything since the last update of the lists",
+    );
     for (name, state) in &parsed.repos {
         let r = widgets::row(name, "");
         let (icon, tone_class, text, tone) = match state {
-            State::UpToDate => ("object-select-symbolic", Some("success"), "up to date", Tone::Success),
-            State::Pending => ("software-update-available-symbolic", Some("accent"), "updates pending", Tone::Accent),
+            State::UpToDate => ("object-select-symbolic", Some("success"), "list is current", Tone::Success),
+            State::Pending => ("folder-download-symbolic", Some("accent"), "new data to fetch", Tone::Accent),
             State::Unknown => ("dialog-question-symbolic", None, "unknown, run update first", Tone::Neutral),
             State::Unreachable => ("network-error-symbolic", Some("error"), "unreachable, check its URL", Tone::Error),
         };
