@@ -8,7 +8,7 @@ use gtk::glib;
 
 use crate::commands::Spec;
 use crate::ctx::Ctx;
-use crate::output::{append, terminal_view};
+use crate::output::{append, terminal_view, Feed};
 use crate::runner::{describe, Status};
 
 /// Shows `dialog` and runs `then` if the user picked `response`.
@@ -151,7 +151,7 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
     view.add_bottom_bar(&bottom);
 
     let dialog = adw::Dialog::builder()
-        .title(glib::markup_escape_text(&action.title))
+        .title(&action.title)
         .content_width(980)
         .content_height(660)
         .can_close(false)
@@ -166,16 +166,17 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
     dialog.present(Some(&ctx.window));
 
     let started = Rc::new(std::cell::Cell::new(false));
+    let feed = Feed::new(&buffer);
     let privilege = action.spec.privilege;
-    let (b, st, s) = (buffer.clone(), state.clone(), started.clone());
+    let (st, s) = (state.clone(), started.clone());
     let (ctx2, title) = (ctx.clone(), action.title.clone());
     ctx.runner.run(
         action.spec,
-        move |text| {
+        move |text, kind| {
             if !s.replace(true) {
                 st.set_text("Running\u{2026}");
             }
-            append(&b, text);
+            feed.push(text, kind);
         },
         move |status| {
             spinner.set_visible(false);
@@ -383,8 +384,15 @@ pub fn judge_pin(text: &str) -> Verdict {
 }
 
 /// Judges `install-new --dry-run` and `upgrade-all --dry-run`.
+///
+/// A plan that conflicts with installed packages needs the override: asked
+/// interactively slacker offers continue / remove / abort, but with `--yes`
+/// it warns and carries on, leaving the conflicting packages in place. The
+/// button has to say so.
 pub fn judge_plan(text: &str) -> Verdict {
-    if text.contains("(dry-run: nothing changed)") {
+    if text.contains("ATTENTION:") && text.contains("conflict") {
+        Verdict::Override("Continue anyway")
+    } else if text.contains("(dry-run: nothing changed)") {
         Verdict::Ready
     } else if text.contains("No new packages to install")
         || text.contains("Nothing to upgrade")
@@ -445,6 +453,16 @@ mod tests {
         assert!(matches!(judge_plan("No new packages to install.\n"), Verdict::Nothing));
         assert!(matches!(judge_plan("Nothing to upgrade.\n"), Verdict::Nothing));
         assert!(matches!(judge_plan("slacker: error: could not read metadata"), Verdict::Failed));
+    }
+
+    #[test]
+    fn a_conflicting_plan_needs_the_override() {
+        // report_conflicts() in slacker, shown inside a --dry-run plan.
+        let text = "Install (1):\n  foo  1.0-x86_64-1  [conraid]\n  \
+                    ATTENTION: 1 package conflicts with what is already installed:\n    \
+                    foo conflicts with the installed bar-2.0-x86_64-1\n\
+                    (dry-run: nothing changed)\n";
+        assert!(matches!(judge_plan(text), Verdict::Override("Continue anyway")));
     }
 
     #[test]

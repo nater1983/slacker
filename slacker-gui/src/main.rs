@@ -20,21 +20,6 @@ mod window;
 #[cfg(test)]
 mod install_tests;
 
-#[cfg(test)]
-mod tests {
-    use std::os::unix::fs::MetadataExt;
-
-    /// `/proc/self` is owned by the effective uid: a file this process
-    /// creates gets the same owner.
-    #[test]
-    fn proc_self_owner_is_the_effective_uid() {
-        let dir = std::env::temp_dir().join(format!("slacker-gui-uid-{}", std::process::id()));
-        std::fs::write(&dir, b"x").unwrap();
-        let file_uid = std::fs::metadata(&dir).unwrap().uid();
-        let _ = std::fs::remove_file(&dir);
-        assert_eq!(super::effective_uid(), Some(file_uid));
-    }
-}
 
 use adw::prelude::*;
 use gtk::{gdk, glib};
@@ -90,5 +75,21 @@ fn load_style() {
             &provider,
             gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::MetadataExt;
+
+    /// `/proc/self` is owned by the effective uid: a file this process
+    /// creates gets the same owner.
+    #[test]
+    fn proc_self_owner_is_the_effective_uid() {
+        let dir = std::env::temp_dir().join(format!("slacker-gui-uid-{}", std::process::id()));
+        std::fs::write(&dir, b"x").unwrap();
+        let file_uid = std::fs::metadata(&dir).unwrap().uid();
+        let _ = std::fs::remove_file(&dir);
+        assert_eq!(super::effective_uid(), Some(file_uid));
     }
 }

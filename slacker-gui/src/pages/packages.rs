@@ -125,7 +125,7 @@ pub fn page(ctx: &Ctx) -> Page {
             let (data2, render2, list_box2) = (data.clone(), render.clone(), list_box.clone());
             ctx.runner.capture(commands::history_installed(), move |status, text| {
                 let mut parsed = history::parse(&text);
-                parsed.events.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                parsed.events.sort_by_key(|e| e.name.to_lowercase());
                 *data2.borrow_mut() = parsed.events;
                 render2();
                 if data2.borrow().is_empty() {
@@ -264,7 +264,7 @@ fn package_row(ctx: &Ctx, e: &Event, repo_names: Option<&HashSet<String>>) -> ad
             confirm::run_as_root(
                 &ctx,
                 Action {
-                    spec: make(&[name.clone()]),
+                    spec: make(std::slice::from_ref(&name)),
                     title: format!("{verb} {name}"),
                     verb: verb.to_string(),
                     destructive,

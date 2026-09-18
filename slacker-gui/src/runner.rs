@@ -14,7 +14,8 @@ use gtk::prelude::*;
 use gtk::{gio, glib};
 
 use crate::commands::{Privilege, Spec};
-use crate::output::{append, clean};
+use crate::output::{clean, Feed};
+pub use crate::output::Chunk;
 
 pub const PKEXEC: &str = "/usr/bin/pkexec";
 
@@ -29,6 +30,12 @@ const ENV: [(&str, &str); 4] = [
 ];
 
 const READ_CHUNK: usize = 16 * 1024;
+
+/// How many lines of the shared command log are kept.
+const LOG_MAX_LINES: i32 = 4_000;
+
+/// How often a line that is still being redrawn is shown.
+const PROGRESS_EVERY: std::time::Duration = std::time::Duration::from_millis(150);
 
 #[derive(Clone, Debug)]
 pub enum Status {
@@ -70,7 +77,7 @@ pub fn describe(status: &Status, privilege: Privilege) -> String {
     }
 }
 
-type OnOutput = Box<dyn Fn(&str)>;
+type OnOutput = Box<dyn Fn(&str, Chunk)>;
 type OnDone = Box<dyn FnOnce(Status)>;
 
 struct Job {
@@ -86,7 +93,7 @@ struct Inner {
     slacker: PathBuf,
     busy: Cell<bool>,
     queue: RefCell<VecDeque<Job>>,
-    log: gtk::TextBuffer,
+    log: Feed,
     spinner: gtk::Spinner,
     watched: RefCell<Vec<glib::WeakRef<gtk::Widget>>>,
 }
@@ -97,7 +104,7 @@ impl Runner {
             slacker,
             busy: Cell::new(false),
             queue: RefCell::new(VecDeque::new()),
-            log: gtk::TextBuffer::new(None),
+            log: Feed::capped(&gtk::TextBuffer::new(None), LOG_MAX_LINES),
             spinner,
             watched: RefCell::new(Vec::new()),
         }))
@@ -109,7 +116,7 @@ impl Runner {
 
     /// Every command and its output, for the Command output dialog.
     pub fn log(&self) -> &gtk::TextBuffer {
-        &self.0.log
+        self.0.log.buffer()
     }
 
     pub fn argv(&self, spec: &Spec) -> Vec<String> {
@@ -144,7 +151,7 @@ impl Runner {
     pub fn run(
         &self,
         spec: Spec,
-        on_output: impl Fn(&str) + 'static,
+        on_output: impl Fn(&str, Chunk) + 'static,
         on_done: impl FnOnce(Status) + 'static,
     ) {
         self.0.queue.borrow_mut().push_back(Job {
@@ -163,7 +170,12 @@ impl Runner {
         let t = text.clone();
         self.run(
             spec,
-            move |chunk| {
+            move |chunk, kind| {
+                // A progress line is redrawn in place and never part of the
+                // finished output a parser reads.
+                if kind == Chunk::Progress {
+                    return;
+                }
                 let mut s = t.borrow_mut();
                 s.push_str(chunk);
                 s.push('\n');
@@ -182,18 +194,18 @@ impl Runner {
         };
         self.set_busy(true);
         let argv = self.argv(&job.spec);
-        append(&self.0.log, &format!("$ {}", argv.join(" ")));
+        self.log_line(&format!("$ {}", argv.join(" ")));
 
         let this = self.clone();
         glib::spawn_future_local(async move {
             let status = this.execute(&argv, &*job.on_output).await;
-            append(&this.0.log, &format!("[{}]\n", describe(&status, job.spec.privilege)));
+            this.log_line(&format!("[{}]\n", describe(&status, job.spec.privilege)));
             (job.on_done)(status);
             this.next();
         });
     }
 
-    async fn execute(&self, argv: &[String], on_output: &dyn Fn(&str)) -> Status {
+    async fn execute(&self, argv: &[String], on_output: &dyn Fn(&str, Chunk)) -> Status {
         let launcher = gio::SubprocessLauncher::new(
             gio::SubprocessFlags::STDIN_PIPE
                 | gio::SubprocessFlags::STDOUT_PIPE
@@ -216,6 +228,7 @@ impl Runner {
 
         if let Some(stdout) = proc.stdout_pipe() {
             let mut pending: Vec<u8> = Vec::new();
+            let mut shown = std::time::Instant::now();
             loop {
                 match stdout.read_bytes_future(READ_CHUNK, glib::Priority::DEFAULT).await {
                     Ok(bytes) if bytes.is_empty() => break,
@@ -224,17 +237,26 @@ impl Runner {
                         if let Some(pos) = pending.iter().rposition(|&b| b == b'\n') {
                             let rest = pending.split_off(pos + 1);
                             let complete = std::mem::replace(&mut pending, rest);
-                            self.emit(&complete, on_output);
+                            self.emit(&complete, on_output, Chunk::Line);
+                            shown = std::time::Instant::now();
+                        }
+                        // What is left has no newline yet. A download counter
+                        // never sends one, so show it as it changes rather
+                        // than letting the window look frozen.
+                        if !pending.is_empty() && shown.elapsed() >= PROGRESS_EVERY {
+                            self.emit(&pending, on_output, Chunk::Progress);
+                            shown = std::time::Instant::now();
                         }
                     }
                     Err(e) => {
-                        append(&self.0.log, &format!("[reading output failed: {e}]"));
+                        self.log_line(&format!("[reading output failed: {e}]"));
                         break;
                     }
                 }
             }
             if !pending.is_empty() {
-                self.emit(&pending, on_output);
+                // A last line the command never terminated with a newline.
+                self.emit(&pending, on_output, Chunk::Line);
             }
         }
 
@@ -248,9 +270,16 @@ impl Runner {
         }
     }
 
-    fn emit(&self, raw: &[u8], on_output: &dyn Fn(&str)) {
+    fn emit(&self, raw: &[u8], on_output: &dyn Fn(&str, Chunk), kind: Chunk) {
         let text = clean(raw);
-        on_output(&text);
-        append(&self.0.log, &text);
+        if kind == Chunk::Progress && text.trim().is_empty() {
+            return;
+        }
+        on_output(&text, kind);
+        self.0.log.push(&text, kind);
+    }
+
+    fn log_line(&self, text: &str) {
+        self.0.log.line(text);
     }
 }

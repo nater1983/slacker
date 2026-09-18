@@ -191,15 +191,22 @@ pub fn build(app: &adw::Application) {
         let (pages, loaded, current) = (pages.clone(), loaded.clone(), current.clone());
         ctx.on_system_changed(move || {
             let now = *current.borrow();
-            let mut l = loaded.borrow_mut();
-            for p in pages.iter().filter(|p| p.reload_on_change) {
-                if p.name == now {
-                    if let Some(load) = &p.load {
-                        load();
+            // Mark the others stale first and let go of `loaded`: reloading
+            // runs page code, which is free to touch it again.
+            let visible = {
+                let mut l = loaded.borrow_mut();
+                let mut visible = None;
+                for p in pages.iter().filter(|p| p.reload_on_change) {
+                    if p.name == now {
+                        visible = p.load.clone();
+                    } else {
+                        l.remove(p.name);
                     }
-                } else {
-                    l.remove(p.name);
                 }
+                visible
+            };
+            if let Some(load) = visible {
+                load();
             }
         });
     }

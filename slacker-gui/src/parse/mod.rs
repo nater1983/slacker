@@ -50,3 +50,56 @@ mod tests {
         assert!(super::split_columns("   ").is_empty());
     }
 }
+// dropped into src/parse/mod.rs temporarily
+#[cfg(test)]
+mod adversarial {
+    /// Nasty inputs every parser must survive without panicking.
+    fn inputs() -> Vec<String> {
+        let mut v: Vec<String> = vec![
+            String::new(),
+            "\n\n\n".into(),
+            "   ".into(),
+            "\u{fffd}".into(),
+            "Ο πακέτο δεν βρέθηκε".into(),
+            "ΑΒΓΔ-01-01 10:00  + installed    x  1-1  [r]".into(),
+            "  1. ΑΒ   205ms in sync       https://x/".into(),
+            "[ΑΒ] installed   πακέτο-1.0  περιγραφή".into(),
+            "  ✓ Ελληνικά  detail".into(),
+            "   200 | ΑΒΓ | 0 | all | file:///x  (immutable)".into(),
+        ];
+        // truncations of realistic lines, at every byte offset
+        for line in [
+            "[slackware] installed   emacs-31.1  emacs (GNU Emacs)  (also: extras emacs-31.1)",
+            "2026-09-14 22:10  \u{2191} upgraded     glibc    2.44-4 \u{2192} 2.44-5  [slackware]",
+            "   1. bg    205ms 1d 23h behind https://mirrors.netix.net/slackware/",
+            "   200 | patches    |    0 | all    | file:////x/TREE/patches  (immutable)  (subtree)",
+            "  \u{2713} Repo release all match this system (-current)",
+            "  slackware  updates pending",
+            "  vlc -> alienbob",
+        ] {
+            for i in 0..=line.len() {
+                if line.is_char_boundary(i) {
+                    v.push(line[..i].to_string());
+                }
+            }
+        }
+        v.push("x".repeat(100_000));
+        v
+    }
+
+    #[test]
+    fn no_parser_panics_on_junk() {
+        for s in inputs() {
+            let _ = super::search::parse(&s);
+            let _ = super::status::parse(&s);
+            let _ = super::repos::parse(&s);
+            let _ = super::updates::parse(&s);
+            let _ = super::history::parse(&s);
+            let _ = super::rules::parse_frozen(&s);
+            let _ = super::rules::parse_pins(&s);
+            let f = super::mirrors::parse(&s);
+            let _ = super::mirrors::suggestions(&f, 3);
+            let _ = super::split_columns(&s);
+        }
+    }
+}

@@ -226,7 +226,7 @@ pub fn show_info(ctx: &Ctx, name: &str) {
     view.add_top_bar(&adw::HeaderBar::new());
     view.set_content(Some(&inner));
     let dialog = adw::Dialog::builder()
-        .title(gtk::glib::markup_escape_text(name))
+        .title(name)
         .content_width(720)
         .content_height(560)
         .child(&view)

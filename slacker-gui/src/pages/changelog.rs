@@ -11,7 +11,7 @@ use crate::commands::{self, Privilege};
 use crate::ctx::Ctx;
 use crate::output;
 use crate::parse::repos;
-use crate::runner::describe;
+use crate::runner::{describe, Chunk};
 use crate::widgets;
 
 /// A ChangeLog can be tens of thousands of lines; past this the page stops
@@ -109,10 +109,15 @@ fn load(ctx: &Ctx, area: &gtk::Box, repo: Option<String>) {
     let (b, l, s) = (buffer.clone(), lines.clone(), started.clone());
     ctx.runner.run(
         commands::show_changelog(repo.as_deref()),
-        move |text| {
+        move |text, kind| {
             if !s.replace(true) {
                 widgets::clear(&area2);
                 area2.append(&output::terminal_view(&b));
+            }
+            // A ChangeLog is plain text; a redrawn line would only be the
+            // fetch counter, which belongs nowhere in the page.
+            if kind == Chunk::Progress {
+                return;
             }
             let mut n = l.borrow_mut();
             if *n >= MAX_LINES {

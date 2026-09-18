@@ -101,9 +101,11 @@ pub fn group(title: &str, description: &str) -> adw::PreferencesGroup {
 pub fn page_body() -> (gtk::ScrolledWindow, gtk::Box) {
     let content = gtk::Box::new(gtk::Orientation::Vertical, 24);
     content.add_css_class("page-body");
+    // Rows here carry a URL and a row of tags, not prose: 880 (the usual
+    // width for a page of text) wrapped the repository and mirror rows.
     let clamp = adw::Clamp::builder()
-        .maximum_size(880)
-        .tightening_threshold(600)
+        .maximum_size(1040)
+        .tightening_threshold(700)
         .child(&content)
         .build();
     let scroller = gtk::ScrolledWindow::builder()

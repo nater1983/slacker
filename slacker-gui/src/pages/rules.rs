@@ -25,12 +25,17 @@ pub fn page(ctx: &Ctx) -> Page {
     // `load` is referenced by the locked view it creates on failure, so it
     // lives in a slot filled right after it is built.
     let slot: Slot = Rc::default();
+    // Whether the list has been read once in this session. Until it has,
+    // nothing here may run as root on its own.
+    let unlocked = Rc::new(std::cell::Cell::new(false));
     let load: Rc<dyn Fn()> = {
-        let (ctx, body, refresh, slot) = (ctx.clone(), body.clone(), refresh.clone(), slot.clone());
+        let (ctx, body, refresh, slot, unlocked) =
+            (ctx.clone(), body.clone(), refresh.clone(), slot.clone(), unlocked.clone());
         Rc::new(move || {
             widgets::clear(&body);
             body.append(&widgets::loading("Waiting for authorization\u{2026}"));
-            let (ctx2, body2, refresh2, slot2) = (ctx.clone(), body.clone(), refresh.clone(), slot.clone());
+            let (ctx2, body2, refresh2, slot2, unlocked2) =
+                (ctx.clone(), body.clone(), refresh.clone(), slot.clone(), unlocked.clone());
             ctx.runner.capture(commands::frozen_list(), move |fst, ftext| {
                 if !fst.answered() {
                     widgets::clear(&body2);
@@ -41,6 +46,7 @@ pub fn page(ctx: &Ctx) -> Page {
                 ctx2.runner.capture(commands::pin_list(), move |pst, ptext| {
                     widgets::clear(&body3);
                     refresh3.set_visible(true);
+                    unlocked2.set(true);
                     let frozen = rules::parse_frozen(&ftext);
                     let pins = rules::parse_pins(&ptext);
                     let pin_error = if pst.answered() {
@@ -56,10 +62,16 @@ pub fn page(ctx: &Ctx) -> Page {
     };
     *slot.borrow_mut() = Some(load.clone());
     {
-        // A rule or pin changed (here or from another page): read again.
-        // Authorization was just given for the change itself.
-        let l = load.clone();
-        ctx.on_rules_changed(move || l());
+        // A rule or pin changed, here or from another page. Read the list
+        // again only if it was already on screen: re-reading needs root, and
+        // a page the user never opened must not raise a password prompt of
+        // its own after an unrelated change elsewhere.
+        let (l, unlocked) = (load.clone(), unlocked.clone());
+        ctx.on_rules_changed(move || {
+            if unlocked.get() {
+                l();
+            }
+        });
     }
     {
         let l = load.clone();
@@ -126,7 +138,7 @@ fn render(ctx: &Ctx, body: &gtk::Box, frozen: &rules::Frozen, pins: &rules::Pins
         if let Some(repo) = scope {
             r.add_suffix(&widgets::pill(&format!("only in {repo}"), Tone::Neutral));
         }
-        r.add_suffix(&remove_button(ctx, "Unfreeze", rule.clone(), |c, v| edit::unfreeze(c, v)));
+        r.add_suffix(&remove_button(ctx, "Unfreeze", rule.clone(), edit::unfreeze));
         g.add(&r);
     }
     body.append(&g);
@@ -154,7 +166,7 @@ fn render(ctx: &Ctx, body: &gtk::Box, frozen: &rules::Frozen, pins: &rules::Pins
                 let r = widgets::row(pkg, "");
                 r.add_prefix(&widgets::tile("view-pin-symbolic", Some("accent")));
                 r.add_suffix(&widgets::pill(&format!("from {repo}"), Tone::Accent));
-                r.add_suffix(&remove_button(ctx, "Unpin", pkg.clone(), |c, v| edit::unpin(c, v)));
+                r.add_suffix(&remove_button(ctx, "Unpin", pkg.clone(), edit::unpin));
                 g.add(&r);
             }
         }
