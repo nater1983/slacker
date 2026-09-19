@@ -1,0 +1,157 @@
+/* slacker-gui — libadwaita dark, with a restrained Slackware red accent. */
+
+@define-color accent_bg_color #b8262b;
+@define-color accent_fg_color #ffffff;
+@define-color accent_color #ff8a84;
+@define-color slk_purple #c47fd5;
+
+/* ---- sidebar ---- */
+.brand { font-weight: 800; font-size: 13pt; letter-spacing: 0.02em; }
+.brand-mark { color: @accent_color; font-size: 11pt; }
+.navigation-sidebar row { min-height: 40px; }
+.nav-row { padding: 0 4px; }
+.sidebar-footer {
+  padding: 10px 16px;
+  font-size: 8.5pt;
+  font-family: monospace;
+  opacity: 0.45;
+}
+
+/* ---- page layout ---- */
+.page-body { margin: 28px 20px 36px 20px; }
+.dialog-body { padding: 0 16px 16px 16px; }
+
+/* ---- hero cards ---- */
+.hero {
+  padding: 26px 28px;
+  border-radius: 20px;
+  background-image: linear-gradient(135deg, alpha(@accent_bg_color, 0.30), alpha(@accent_bg_color, 0.04) 65%);
+  box-shadow: inset 0 0 0 1px alpha(@accent_bg_color, 0.35);
+}
+.hero.good {
+  background-image: linear-gradient(135deg, alpha(@success_color, 0.20), alpha(@success_color, 0.03) 65%);
+  box-shadow: inset 0 0 0 1px alpha(@success_color, 0.28);
+}
+.hero.bad {
+  background-image: linear-gradient(135deg, alpha(@error_color, 0.26), alpha(@error_color, 0.04) 65%);
+  box-shadow: inset 0 0 0 1px alpha(@error_color, 0.35);
+}
+.hero-icon { opacity: 0.95; }
+.hero.good .hero-icon { color: @success_color; }
+.hero.attention .hero-icon { color: @accent_color; }
+.hero.bad .hero-icon { color: @error_color; }
+.hero-caption { font-size: 8.5pt; font-weight: 800; letter-spacing: 0.12em; opacity: 0.6; }
+.hero-title { font-size: 19pt; font-weight: 800; }
+.hero-note { color: @warning_color; }
+.step-chip {
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-family: monospace;
+  font-weight: 600;
+  background-color: alpha(currentColor, 0.10);
+}
+
+/* ---- stats ---- */
+.stat-strip { margin-bottom: -4px; }
+.stat {
+  padding: 14px 18px;
+  border-radius: 14px;
+  background-color: alpha(currentColor, 0.05);
+}
+.stat-value { font-size: 18pt; font-weight: 800; font-feature-settings: "tnum"; }
+.stat-label { font-size: 9pt; opacity: 0.6; }
+
+/* ---- rows ---- */
+.icon-tile {
+  min-width: 34px;
+  min-height: 34px;
+  border-radius: 10px;
+  background-color: alpha(currentColor, 0.08);
+}
+.icon-tile image { margin: 8px; }
+.icon-tile.success { color: @success_color; background-color: alpha(@success_color, 0.14); }
+.icon-tile.warning { color: @warning_color; background-color: alpha(@warning_color, 0.14); }
+.icon-tile.error { color: @error_color; background-color: alpha(@error_color, 0.14); }
+.icon-tile.purple { color: @slk_purple; background-color: alpha(@slk_purple, 0.16); }
+.icon-tile.info { color: #78aeed; background-color: alpha(#3584e4, 0.18); }
+.icon-tile.accent { color: @accent_color; background-color: alpha(@accent_bg_color, 0.30); }
+
+.tag {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 8.5pt;
+  font-weight: 700;
+  background-color: alpha(currentColor, 0.10);
+}
+.tag.accent { color: @accent_color; }
+.tag.purple { color: @slk_purple; }
+
+.pri-badge {
+  min-width: 42px;
+  padding: 7px 2px;
+  border-radius: 11px;
+  font-weight: 800;
+  font-feature-settings: "tnum";
+  background-color: alpha(currentColor, 0.08);
+}
+.pri-badge.top { color: #ffffff; background-color: @accent_bg_color; }
+
+.numeric { font-feature-settings: "tnum"; }
+button.pill-button { border-radius: 999px; padding-left: 16px; padding-right: 16px; }
+
+/* ---- search ---- */
+entry.search-hero {
+  min-height: 48px;
+  border-radius: 14px;
+  font-size: 12pt;
+  padding-left: 14px;
+}
+.caption.error { color: @error_color; }
+
+/* ---- output ---- */
+.terminal-card {
+  border-radius: 14px;
+  background-color: alpha(black, 0.30);
+  box-shadow: inset 0 0 0 1px alpha(currentColor, 0.06);
+}
+textview.terminal, textview.terminal > text {
+  background-color: transparent;
+  font-size: 9.5pt;
+}
+.command-line {
+  margin-top: 6px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-family: monospace;
+  font-size: 9.5pt;
+  background-color: alpha(black, 0.28);
+}
+.tx-body { padding: 4px 16px 0 16px; }
+.tx-status { padding: 6px 2px; }
+.tx-status image.success { color: @success_color; }
+.tx-status image.error { color: @error_color; }
+.tx-status image.accent { color: @accent_color; }
+.tx-bottom { padding: 12px 16px; }
+/* a question slacker is waiting on */
+.question {
+  margin-top: 10px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background-color: alpha(@accent_bg_color, 0.12);
+  box-shadow: inset 0 0 0 1px alpha(@accent_bg_color, 0.35);
+}
+
+/* Removal is a different kind of action from Install: outlined, not filled. */
+button.pill-button.destructive-action {
+  background-color: transparent;
+  color: @error_color;
+  box-shadow: inset 0 0 0 1px alpha(@error_color, 0.55);
+}
+button.pill-button.destructive-action:hover {
+  background-color: alpha(@error_color, 0.12);
+}
+
+.menu-note { margin: 4px 10px 8px 10px; }
+
+/* rows whose title is a URL or path */
+.mono-title .title { font-family: monospace; font-size: 9.5pt; }
