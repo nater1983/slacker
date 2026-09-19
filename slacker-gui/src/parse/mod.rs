@@ -7,6 +7,7 @@
 
 pub mod history;
 pub mod mirrors;
+pub mod prompt;
 pub mod repos;
 pub mod rules;
 pub mod search;
@@ -95,6 +96,9 @@ mod adversarial {
             let _ = super::repos::parse(&s);
             let _ = super::updates::parse(&s);
             let _ = super::history::parse(&s);
+            let lines: Vec<&str> = s.lines().collect();
+            let (before, last) = lines.split_at(lines.len().saturating_sub(1));
+            let _ = super::prompt::detect(before, last.first().copied().unwrap_or(""));
             let _ = super::rules::parse_frozen(&s);
             let _ = super::rules::parse_pins(&s);
             let f = super::mirrors::parse(&s);

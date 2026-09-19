@@ -17,14 +17,17 @@ runs the slacker binary, reads what slacker prints, and lays it out.
   Frozen & Pins  slacker frozen, slacker pin      (root: slacker lists
                                                 these only to root; read
                                                 on request)
-                 add:    frozen RULE, pin REPO:PKG          (root, previewed)
+                 add:    frozen RULE, pin REPO:PKG          (root)
                  remove: unfrozen RULE, unpin PKG           (root)
   History        slacker history --last 300
   Details        slacker info NAME
 
   read-only      slacker <cmd>                  as the desktop user
-  changes        pkexec slacker <cmd> --yes     as root, after a dialog
-                                                that shows the command line
+  changes        pkexec slacker <cmd>           as root; slacker asks its
+                                                own questions and the user
+                                                answers them in the window
+                                                (unfrozen/unpin ask nothing,
+                                                so the GUI asks first)
 
 Requirements
 ------------
@@ -79,18 +82,26 @@ Overview page warns when more than one exists (a leftover binary). SLACKER_BIN=/
 
 Output
 ------
-Commands run one at a time, with LC_ALL=C, TERM=dumb, NO_COLOR=1 and
-stdin closed. stderr is merged into stdout. Every command and its full
+Commands run one at a time, with LC_ALL=C, TERM=dumb and NO_COLOR=1.
+Read-only commands get stdin closed. stderr is merged into stdout. Every command and its full
 output is in the Command Output dialog: main menu (F10), or
 Ctrl+Shift+O.
 
-Adding a rule or a pin is previewed: the same command runs first
-without --yes and with stdin closed, so slacker prints what it would
-write, reads end-of-file as "no" and writes nothing. The dialog shows
-that text; the change is applied with --yes only after the user agrees.
-When slacker flags a rule as a likely mistake the button reads
-"Freeze anyway" / "Pin anyway". (--dry-run is not used for these:
-frozen and pin do not look at it.)
+Questions
+---------
+No command gets --yes. A change runs in a window with its live output,
+and stdin stays open to slacker. When slacker stops on one of its own
+questions the window shows it with buttons, and the answer is written
+to slacker's stdin exactly as it would be typed on a terminal:
+  ... [y/N]                    Yes / No (Enter = slacker's default)
+  Choice [c/r/a]: + [x]word    one row per option; "(default)" marked
+  Enter numbers to VERB ...    package checklist -> Enter / "1 3" / n
+  N repo(s) to update ...      repository checklist -> a / "1 2" / n
+The answer is echoed onto the question line in the output. The
+recognised shapes follow slacker's source (src/parse/prompt.rs); if
+output stops for a few seconds on a line that is none of them, the
+window offers "Stop Answering", which closes stdin: slacker then reads
+end-of-file, and its default for every change is no.
 Freeze and pin are also in the menu of every row on the Installed page.
 Reinstall is offered only for packages a configured repository serves:
 history labels each package with that repository, or with its build tag

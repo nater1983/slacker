@@ -4,6 +4,12 @@
 //! The split follows slacker's own `requires_privilege`: search, info,
 //! list-repos, status, check-updates and history are free for anyone;
 //! everything that writes needs root.
+//!
+//! No command carries `--yes`. A command that changes the system asks its
+//! own questions — the plan and "Proceed? [y/N]", a package picker, a
+//! conflict choice — and the GUI puts them to the user as they come. Where
+//! nobody answers, slacker reads end of input and takes its own default,
+//! which for every change is No.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Privilege {
@@ -17,36 +23,24 @@ pub enum Privilege {
 pub struct Spec {
     pub args: Vec<String>,
     pub privilege: Privilege,
+    /// slacker itself shows what it is about to do and asks before it
+    /// writes anything. When false the change happens as soon as the
+    /// command runs, so the GUI asks first.
+    pub confirms: bool,
 }
 
 fn user(args: &[&str]) -> Spec {
     Spec {
         args: args.iter().map(|a| a.to_string()).collect(),
         privilege: Privilege::User,
+        confirms: false,
     }
 }
 
-/// Root commands always carry `--yes`: there is no terminal behind the GUI,
-/// so slacker must not stop and wait for an answer on stdin. The GUI asks
-/// for confirmation itself before running one of these.
-fn root(args: &[&str], names: &[String]) -> Spec {
+fn root(args: &[&str], rest: &[String], confirms: bool) -> Spec {
     let mut v: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-    v.extend(names.iter().cloned());
-    v.push("--yes".to_string());
-    Spec {
-        args: v,
-        privilege: Privilege::Root,
-    }
-}
-
-/// slacker requires root even to list frozen rules and pins (they are not
-/// in its `requires_privilege` read-only list). No `--yes`: listing asks
-/// nothing.
-fn root_query(args: &[&str]) -> Spec {
-    Spec {
-        args: args.iter().map(|a| a.to_string()).collect(),
-        privilege: Privilege::Root,
-    }
+    v.extend(rest.iter().cloned());
+    Spec { args: v, privilege: Privilege::Root, confirms }
 }
 
 // ---- read-only, desktop user --------------------------------------------
@@ -101,97 +95,75 @@ pub fn history_installed() -> Spec {
 }
 
 // ---- listing that slacker allows only as root -----------------------------
+// (not in its `requires_privilege` read-only list; with no argument they
+// only print)
 
 pub fn frozen_list() -> Spec {
-    root_query(&["frozen"])
+    root(&["frozen"], &[], false)
 }
 
 pub fn pin_list() -> Spec {
-    root_query(&["pin"])
+    root(&["pin"], &[], false)
 }
 
-// ---- frozen rules and pins ------------------------------------------------
-//
-// `frozen RULE` and `pin REPO:PKG` print what they would write and then ask
-// for confirmation. Run without `--yes`, with stdin closed, the answer is
-// end-of-file, slacker's `confirm()` reads it as "no", prints "aborted —
-// nothing changed" and writes nothing. That run is the preview; the same
-// command with `--yes` applies it. (`--dry-run` is NOT used here: `frozen`
-// and `pin` do not look at it.)
+// ---- changes that slacker confirms itself ---------------------------------
 
-pub fn freeze_preview(rule: &str) -> Spec {
-    root_query(&["frozen", rule])
-}
-
+/// Prints the rule it will add, then "Add these to the blacklist? [y/N]"
+/// (first "declare them anyway? [y/N]" when the rule looks like a mistake).
 pub fn freeze(rule: &str) -> Spec {
-    root(&["frozen"], &[rule.to_string()])
+    root(&["frozen"], &[rule.to_string()], true)
 }
 
-pub fn pin_preview(repo: &str, package: &str) -> Spec {
-    let target = format!("{repo}:{package}");
-    root_query(&["pin", &target])
-}
-
+/// "write it to the blacklist? [y/N]"
 pub fn pin(repo: &str, package: &str) -> Spec {
-    root(&["pin"], &[format!("{repo}:{package}")])
+    root(&["pin"], &[format!("{repo}:{package}")], true)
 }
 
-/// `pri-repo PRIORITY NAME` prints the change and asks; like `frozen`, the
-/// run without `--yes` is the preview. Priorities are whole numbers; the GUI
-/// only offers non-negative ones, so the value can never read as an option.
-pub fn pri_repo_preview(priority: u32, name: &str) -> Spec {
-    let p = priority.to_string();
-    root_query(&["pri-repo", &p, name])
-}
-
+/// "Write it to the repos file? [y/N]". Priorities are whole numbers; the
+/// GUI offers only non-negative ones, so the value never reads as an option.
 pub fn pri_repo(priority: u32, name: &str) -> Spec {
-    root(&["pri-repo"], &[priority.to_string(), name.to_string()])
+    root(&["pri-repo"], &[priority.to_string(), name.to_string()], true)
 }
 
-/// `unfrozen` removes the rule whose text matches exactly; it asks nothing.
-pub fn unfreeze(rule: &str) -> Spec {
-    root_query(&["unfrozen", rule])
-}
-
-/// `unpin` removes the package's pin; it asks nothing.
-pub fn unpin(package: &str) -> Spec {
-    root_query(&["unpin", package])
-}
-
-// ---- system changes, root -----------------------------------------------
-
+/// Lists the repositories with news and asks which to fetch; fetching
+/// changes no package.
 pub fn update() -> Spec {
-    root(&["update"], &[])
+    root(&["update"], &[], true)
 }
 
+/// A picker when several packages match, the plan, then "Install new
+/// packages? [y/N]" (a conflict choice instead when the plan conflicts).
 pub fn install_new() -> Spec {
-    root(&["install-new"], &[])
+    root(&["install-new"], &[], true)
 }
 
-/// The plan of `install-new` / `upgrade-all` without touching anything.
-/// Unlike `frozen` and `pin`, these commands do read `--dry-run`.
-pub fn install_new_preview() -> Spec {
-    root_query(&["install-new", "--dry-run"])
-}
-
-pub fn upgrade_all_preview() -> Spec {
-    root_query(&["upgrade-all", "--dry-run"])
-}
-
+/// Picker, plan, "Proceed with upgrade-all? [y/N]".
 pub fn upgrade_all() -> Spec {
-    root(&["upgrade-all"], &[])
+    root(&["upgrade-all"], &[], true)
 }
 
 pub fn install(names: &[String]) -> Spec {
-    root(&["install"], names)
+    root(&["install"], names, true)
 }
 
 pub fn reinstall(names: &[String]) -> Spec {
-    root(&["reinstall"], names)
+    root(&["reinstall"], names, true)
 }
 
 pub fn remove(names: &[String]) -> Spec {
-    root(&["remove"], names)
+    root(&["remove"], names, true)
+}
+
+// ---- changes that slacker makes at once -----------------------------------
+
+/// Removes the rule whose text matches exactly; asks nothing.
+pub fn unfreeze(rule: &str) -> Spec {
+    root(&["unfrozen"], &[rule.to_string()], false)
+}
+
+/// Removes the package's pin; asks nothing.
+pub fn unpin(package: &str) -> Spec {
+    root(&["unpin"], &[package.to_string()], false)
 }
 
 /// Checks a typed freeze rule. Spaces are allowed (`@repo PATTERN`); a
@@ -233,71 +205,87 @@ pub fn single_name(input: &str) -> Result<String, String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn root_commands_end_with_yes() {
+    fn every_spec() -> Vec<Spec> {
         let n = vec!["vim".to_string()];
-        for s in [update(), install_new(), upgrade_all(), install(&n), reinstall(&n), remove(&n)] {
-            assert_eq!(s.privilege, Privilege::Root);
-            assert_eq!(s.args.last().map(String::as_str), Some("--yes"));
-        }
-    }
-
-    #[test]
-    fn read_only_commands_run_as_user() {
-        for s in [
+        vec![
             version(),
             status(),
             search("vim"),
             info("vim"),
             list_repos(),
-            check_updates(),
             find_mirror(),
             show_changelog(None),
             show_changelog(Some("conraid")),
+            check_updates(),
             history_recent(10),
             history_installed(),
-        ] {
-            assert_eq!(s.privilege, Privilege::User);
-            assert!(!s.args.iter().any(|a| a == "--yes"));
+            frozen_list(),
+            pin_list(),
+            freeze("kde/"),
+            pin("alienbob", "vlc"),
+            pri_repo(61, "alienbob"),
+            update(),
+            install_new(),
+            upgrade_all(),
+            install(&n),
+            reinstall(&n),
+            remove(&n),
+            unfreeze("kde/"),
+            unpin("vlc"),
+        ]
+    }
+
+    #[test]
+    fn no_command_answers_for_the_user() {
+        for s in every_spec() {
+            assert!(
+                !s.args.iter().any(|a| a == "--yes" || a == "-y" || a == "--dry-run"),
+                "{:?}",
+                s.args
+            );
         }
     }
 
     #[test]
-    fn plan_previews_are_dry_runs_without_yes() {
-        for s in [install_new_preview(), upgrade_all_preview()] {
-            assert_eq!(s.privilege, Privilege::Root);
-            assert!(s.args.contains(&"--dry-run".to_string()));
-            assert!(!s.args.iter().any(|a| a == "--yes"));
+    fn changes_run_as_root_and_reads_as_the_user() {
+        let n = vec!["vim".to_string()];
+        for s in [freeze("x"), pin("a", "b"), pri_repo(1, "a"), update(), install_new(), upgrade_all(),
+                  install(&n), reinstall(&n), remove(&n), unfreeze("x"), unpin("b"), frozen_list(), pin_list()] {
+            assert_eq!(s.privilege, Privilege::Root, "{:?}", s.args);
         }
-        assert_eq!(upgrade_all_preview().args, vec!["upgrade-all", "--dry-run"]);
-        assert_eq!(show_changelog(None).args, vec!["show-changelog"]);
+        for s in [version(), status(), search("vim"), info("vim"), list_repos(), find_mirror(),
+                  show_changelog(None), check_updates(), history_recent(10), history_installed()] {
+            assert_eq!(s.privilege, Privilege::User, "{:?}", s.args);
+        }
+    }
+
+    #[test]
+    fn only_unfreeze_and_unpin_change_without_asking() {
+        // Every root change except these two prints its plan and asks first
+        // (checked against slacker's cmd_* functions), so the GUI must ask
+        // for these two itself.
+        let n = vec!["vim".to_string()];
+        for s in [freeze("x"), pin("a", "b"), pri_repo(1, "a"), update(), install_new(), upgrade_all(),
+                  install(&n), reinstall(&n), remove(&n)] {
+            assert!(s.confirms, "{:?}", s.args);
+        }
+        assert!(!unfreeze("x").confirms && !unpin("b").confirms);
+    }
+
+    #[test]
+    fn arguments_are_exactly_what_slacker_expects() {
+        assert_eq!(search("vim").args, vec!["search", "vim"]);
+        assert_eq!(info("vim").args, vec!["info", "vim"]);
+        assert_eq!(history_recent(300).args, vec!["history", "--last", "300"]);
         assert_eq!(show_changelog(Some("conraid")).args, vec!["show-changelog", "conraid"]);
-    }
-
-    #[test]
-    fn root_listings_carry_no_arguments() {
-        for (s, cmd) in [(frozen_list(), "frozen"), (pin_list(), "pin")] {
-            assert_eq!(s.privilege, Privilege::Root);
-            // No argument means "list"; anything more would add a rule.
-            assert_eq!(s.args, vec![cmd]);
-        }
-    }
-
-    #[test]
-    fn previews_never_carry_yes_and_applies_always_do() {
-        for s in [freeze_preview("@testing kernel-generic"), pin_preview("alienbob", "vlc")] {
-            assert_eq!(s.privilege, Privilege::Root);
-            assert!(!s.args.iter().any(|a| a == "--yes"), "{:?}", s.args);
-        }
-        assert_eq!(freeze_preview("@testing kernel-generic").args, vec!["frozen", "@testing kernel-generic"]);
-        assert_eq!(freeze("kde/").args, vec!["frozen", "kde/", "--yes"]);
-        assert_eq!(pin_preview("alienbob", "vlc").args, vec!["pin", "alienbob:vlc"]);
-        assert_eq!(pin("alienbob", "vlc").args, vec!["pin", "alienbob:vlc", "--yes"]);
-        assert_eq!(pri_repo_preview(61, "alienbob").args, vec!["pri-repo", "61", "alienbob"]);
-        assert_eq!(pri_repo(61, "alienbob").args, vec!["pri-repo", "61", "alienbob", "--yes"]);
-        assert_eq!(pri_repo_preview(61, "alienbob").privilege, Privilege::Root);
+        assert_eq!(frozen_list().args, vec!["frozen"]);
+        assert_eq!(pin_list().args, vec!["pin"]);
+        assert_eq!(freeze("@testing kernel-generic").args, vec!["frozen", "@testing kernel-generic"]);
+        assert_eq!(pin("alienbob", "vlc").args, vec!["pin", "alienbob:vlc"]);
+        assert_eq!(pri_repo(61, "alienbob").args, vec!["pri-repo", "61", "alienbob"]);
         assert_eq!(unfreeze("fcitx5*").args, vec!["unfrozen", "fcitx5*"]);
         assert_eq!(unpin("vlc").args, vec!["unpin", "vlc"]);
+        assert_eq!(upgrade_all().args, vec!["upgrade-all"]);
     }
 
     #[test]
@@ -305,13 +293,6 @@ mod tests {
         assert_eq!(rule_text(" @alienbob vlc ").unwrap(), "@alienbob vlc");
         assert!(rule_text("").is_err());
         assert!(rule_text("--yes").is_err());
-    }
-
-    #[test]
-    fn search_and_info_take_one_argument() {
-        assert_eq!(search("vim").args, vec!["search", "vim"]);
-        assert_eq!(info("vim").args, vec!["info", "vim"]);
-        assert_eq!(history_recent(300).args, vec!["history", "--last", "300"]);
     }
 
     #[test]

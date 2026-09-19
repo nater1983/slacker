@@ -1,7 +1,7 @@
 //! Adding and removing frozen rules and pins. Every change goes through
-//! slacker (`frozen`, `unfrozen`, `pin`, `unpin`); additions are previewed
-//! first so the user sees slacker's own description before anything is
-//! written.
+//! slacker (`frozen`, `unfrozen`, `pin`, `unpin`). Additions show slacker's
+//! own description and question in the GUI and are written only when the
+//! user answers yes; removals ask first in the GUI, since slacker does not.
 
 use std::rc::Rc;
 
@@ -9,7 +9,7 @@ use adw::prelude::*;
 use gtk::glib;
 
 use crate::commands;
-use crate::confirm::{self, Action, Previewed};
+use crate::confirm::{self, Action};
 use crate::ctx::Ctx;
 use crate::parse::repos;
 
@@ -30,7 +30,7 @@ fn hint_label(text: &str) -> gtk::Label {
     l
 }
 
-/// Asks for a freeze rule, then previews and applies it.
+/// Asks for a freeze rule, then lets slacker show and confirm it.
 pub fn freeze_dialog(ctx: &Ctx, prefill: Option<&str>) {
     let entry = gtk::Entry::builder()
         .placeholder_text("vlc   fcitx5*   kde/   @testing kernel-generic")
@@ -84,17 +84,13 @@ pub fn freeze_dialog(ctx: &Ctx, prefill: Option<&str>) {
     confirm::after_choice(&dialog, "check", &ctx.window, move || {
         let ctx = ctx2;
         let Ok(rule) = commands::rule_text(&entry.text()) else { return };
-        confirm::run_previewed(
+        confirm::run_as_root(
             &ctx,
-            Previewed {
-                preview: commands::freeze_preview(&rule),
-                action: Action {
-                    spec: commands::freeze(&rule),
-                    title: format!("Freeze \u{201c}{rule}\u{201d}"),
-                    verb: "Freeze".into(),
-                    destructive: false,
-                },
-                judge: confirm::judge_freeze,
+            Action {
+                spec: commands::freeze(&rule),
+                title: format!("Freeze \u{201c}{rule}\u{201d}"),
+                verb: "Freeze".into(),
+                destructive: false,
             },
             after_change(&ctx),
         );
@@ -104,7 +100,7 @@ pub fn freeze_dialog(ctx: &Ctx, prefill: Option<&str>) {
     });
 }
 
-/// Asks for a package and a repository, then previews and applies the pin.
+/// Asks for a package and a repository, then lets slacker show and confirm the pin.
 pub fn pin_dialog(ctx: &Ctx, prefill: Option<&str>) {
     let entry = gtk::Entry::builder()
         .placeholder_text("Package name, e.g. vlc")
@@ -199,17 +195,13 @@ pub fn pin_dialog(ctx: &Ctx, prefill: Option<&str>) {
         else {
             return;
         };
-        confirm::run_previewed(
+        confirm::run_as_root(
             &ctx,
-            Previewed {
-                preview: commands::pin_preview(&repo_name, &package),
-                action: Action {
-                    spec: commands::pin(&repo_name, &package),
-                    title: format!("Pin {package} to {repo_name}"),
-                    verb: "Pin".into(),
-                    destructive: false,
-                },
-                judge: confirm::judge_pin,
+            Action {
+                spec: commands::pin(&repo_name, &package),
+                title: format!("Pin {package} to {repo_name}"),
+                verb: "Pin".into(),
+                destructive: false,
             },
             after_change(&ctx),
         );
@@ -245,8 +237,8 @@ pub fn unpin(ctx: &Ctx, package: &str) {
     );
 }
 
-/// Asks for a new priority for an active repository, then previews and
-/// applies `pri-repo`. slacker checks that the number is free; its message
+/// Asks for a new priority for an active repository, then runs `pri-repo`,
+/// which shows the change and asks before writing it. slacker checks that the number is free; its message
 /// is shown when it is not.
 pub fn priority_dialog(ctx: &Ctx, name: &str, current: i32, taken: &[(i32, String)]) {
     let spin = gtk::SpinButton::with_range(0.0, 10_000.0, 1.0);
@@ -310,17 +302,13 @@ pub fn priority_dialog(ctx: &Ctx, name: &str, current: i32, taken: &[(i32, Strin
         spin.update();
         let Ok(priority) = u32::try_from(spin.value_as_int()) else { return };
         let ctx2 = ctx.clone();
-        confirm::run_previewed(
+        confirm::run_as_root(
             &ctx,
-            Previewed {
-                preview: commands::pri_repo_preview(priority, &name),
-                action: Action {
-                    spec: commands::pri_repo(priority, &name),
-                    title: format!("Priority of {name}: {current} \u{2192} {priority}"),
-                    verb: "Change".into(),
-                    destructive: false,
-                },
-                judge: confirm::judge_priority,
+            Action {
+                spec: commands::pri_repo(priority, &name),
+                title: format!("Priority of {name}: {current} \u{2192} {priority}"),
+                verb: "Change".into(),
+                destructive: false,
             },
             move |st| {
                 if confirm::may_have_changed(st) {

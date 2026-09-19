@@ -1,6 +1,11 @@
-//! Root actions: a confirmation that shows the exact command line, then a
-//! transaction dialog with slacker's live output.
+//! Root actions. slacker runs without `--yes`, so it asks its own questions —
+//! the plan and "Proceed? [y/N]", the package picker, a conflict choice —
+//! and they are put to the user in the window that shows its output, where
+//! the plan can be read while answering. Only for the two commands that
+//! change something without asking (`unfrozen`, `unpin`) does the GUI ask
+//! first, showing the exact command line.
 
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use adw::prelude::*;
@@ -8,8 +13,17 @@ use gtk::glib;
 
 use crate::commands::Spec;
 use crate::ctx::Ctx;
-use crate::output::{append, terminal_view, Feed};
-use crate::runner::{describe, Status};
+use crate::output::{append, terminal_view, Chunk, Feed};
+use crate::parse::prompt::{self, Question};
+use crate::runner::{describe, Input, Status};
+
+/// Finished lines kept for recognising a question (the options and the
+/// numbered items sit just above it).
+const CONTEXT_LINES: usize = 400;
+
+/// How long output must stop on an unrecognised unfinished line before the
+/// window offers to stop answering.
+const QUIET: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Shows `dialog` and runs `then` if the user picked `response`.
 ///
@@ -24,7 +38,7 @@ pub fn after_choice(
     then: impl FnOnce() + 'static,
 ) {
     let window = parent.as_ref().root().and_downcast::<gtk::Window>();
-    let then = Rc::new(std::cell::RefCell::new(Some(then)));
+    let then = Rc::new(RefCell::new(Some(then)));
     dialog.connect_response(None, move |_, r| {
         let run = if r == response { then.borrow_mut().take() } else { None };
         let window = window.clone();
@@ -42,28 +56,11 @@ pub fn after_choice(
     dialog.present(Some(parent));
 }
 
-/// The first button below `root` whose label is `label`.
-fn find_button(root: &gtk::Widget, label: &str) -> Option<gtk::Button> {
-    let mut child = root.first_child();
-    while let Some(c) = child {
-        if let Some(b) = c.downcast_ref::<gtk::Button>() {
-            if b.label().as_deref() == Some(label) {
-                return Some(b.clone());
-            }
-        }
-        if let Some(found) = find_button(&c, label) {
-            return Some(found);
-        }
-        child = c.next_sibling();
-    }
-    None
-}
-
 pub struct Action {
     pub spec: Spec,
     /// e.g. "Install vim"
     pub title: String,
-    /// The confirm button, e.g. "Install"
+    /// The button that starts it when the GUI asks first, e.g. "Unpin".
     pub verb: String,
     pub destructive: bool,
 }
@@ -76,14 +73,17 @@ pub fn may_have_changed(status: &Status) -> bool {
 }
 
 pub fn run_as_root(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'static) {
-    let command = ctx.runner.argv(&action.spec).join(" ");
+    // slacker shows its plan and asks before it writes: its question is the
+    // confirmation, asked about what it will really do.
+    if action.spec.confirms {
+        transaction(ctx, action, on_finish);
+        return;
+    }
 
+    let command = ctx.runner.argv(&action.spec).join(" ");
     let dialog = adw::AlertDialog::builder()
         .heading(format!("{}?", action.title))
-        .body(
-            "slacker will run as root and will not ask again before making changes. \
-             You may be asked for your password.",
-        )
+        .body("slacker makes this change as soon as it runs. You may be asked for your password.")
         .close_response("cancel")
         .default_response(if action.destructive { "cancel" } else { "run" })
         .build();
@@ -96,7 +96,6 @@ pub fn run_as_root(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 
             adw::ResponseAppearance::Suggested
         },
     );
-
     let cmd = gtk::Label::builder()
         .label(&command)
         .wrap(true)
@@ -109,6 +108,237 @@ pub fn run_as_root(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 
 
     let ctx2 = ctx.clone();
     after_choice(&dialog, "run", &ctx.window, move || transaction(&ctx2, action, on_finish));
+}
+
+/// The part of the window where slacker's questions are answered.
+#[derive(Clone)]
+struct Asker {
+    input: Input,
+    area: gtk::Box,
+    state: gtk::Label,
+    destructive: bool,
+    /// The question on screen, so a repeated redraw does not rebuild it.
+    showing: Rc<RefCell<Option<Question>>>,
+}
+
+impl Asker {
+    fn answer(&self, answer: &str) {
+        self.clear();
+        self.state.set_text("Running\u{2026}");
+        self.input.send(answer);
+    }
+
+    fn clear(&self) {
+        *self.showing.borrow_mut() = None;
+        while let Some(c) = self.area.first_child() {
+            self.area.remove(&c);
+        }
+        self.area.set_visible(false);
+    }
+
+    fn ask(&self, q: Question) {
+        if self.showing.borrow().as_ref() == Some(&q) {
+            return;
+        }
+        self.clear();
+        self.state.set_text("slacker is asking");
+        match &q {
+            Question::YesNo { text, default_yes } => self.yes_no(text, *default_yes),
+            Question::Choice { heading, options } => self.choice(heading.as_deref(), options),
+            Question::Pick { .. } => self.pick(&q),
+        }
+        self.area.set_visible(true);
+        *self.showing.borrow_mut() = Some(q);
+    }
+
+    fn heading(&self, text: &str) {
+        let l = gtk::Label::builder().label(text).xalign(0.0).wrap(true).build();
+        l.add_css_class("heading");
+        self.area.append(&l);
+    }
+
+    fn yes_no(&self, text: &str, default_yes: bool) {
+        self.heading(text);
+        let row = gtk::Box::builder().spacing(8).halign(gtk::Align::End).build();
+        let no = gtk::Button::with_label("No");
+        let yes = gtk::Button::with_label("Yes");
+        yes.add_css_class(if self.destructive { "destructive-action" } else { "suggested-action" });
+        for b in [&no, &yes] {
+            b.add_css_class("pill");
+            row.append(b);
+        }
+        self.area.append(&row);
+        {
+            let a = self.clone();
+            no.connect_clicked(move |_| a.answer("n"));
+        }
+        {
+            let a = self.clone();
+            yes.connect_clicked(move |_| a.answer("y"));
+        }
+        // Enter takes slacker's own default, as it would on a terminal.
+        let default = if default_yes { yes } else { no };
+        glib::idle_add_local_once(move || {
+            default.grab_focus();
+        });
+    }
+
+    fn choice(&self, heading: Option<&str>, options: &[prompt::Opt]) {
+        if let Some(h) = heading {
+            self.heading(h);
+        }
+        let list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).build();
+        list.add_css_class("boxed-list");
+        let mut first_default = None;
+        for o in options {
+            let row = adw::ActionRow::builder()
+                .use_markup(false)
+                .title(capitalise(&o.label))
+                .subtitle(&o.detail)
+                .activatable(true)
+                .build();
+            if o.default {
+                let tag = gtk::Label::new(Some("default"));
+                tag.add_css_class("tag");
+                tag.set_valign(gtk::Align::Center);
+                row.add_suffix(&tag);
+                first_default.get_or_insert(row.clone());
+            }
+            let (a, key) = (self.clone(), o.key.clone());
+            row.connect_activated(move |_| a.answer(&key));
+            list.append(&row);
+        }
+        self.area.append(&list);
+        if let Some(r) = first_default {
+            glib::idle_add_local_once(move || {
+                r.grab_focus();
+            });
+        }
+    }
+
+    fn pick(&self, q: &Question) {
+        let Question::Pick { heading, items, none, .. } = q else { return };
+        if !heading.is_empty() {
+            self.heading(heading);
+        }
+
+        let checks: Rc<Vec<(u32, gtk::CheckButton)>> = Rc::new(
+            items
+                .iter()
+                .map(|i| (i.number, gtk::CheckButton::builder().active(true).valign(gtk::Align::Center).build()))
+                .collect(),
+        );
+        let list = gtk::ListBox::builder().selection_mode(gtk::SelectionMode::None).build();
+        list.add_css_class("boxed-list");
+        for (item, (_, check)) in items.iter().zip(checks.iter()) {
+            let row = adw::ActionRow::builder()
+                .use_markup(false)
+                .title(&item.text)
+                .activatable_widget(check)
+                .build();
+            row.add_prefix(check);
+            list.append(&row);
+        }
+        let scroller = gtk::ScrolledWindow::builder()
+            .child(&list)
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .propagate_natural_height(true)
+            .max_content_height(260)
+            .build();
+        self.area.append(&scroller);
+
+        let bar = gtk::Box::builder().spacing(8).build();
+        let all = gtk::Button::with_label("Select All");
+        let clear = gtk::Button::with_label("Select None");
+        for b in [&all, &clear] {
+            b.add_css_class("flat");
+            bar.append(b);
+        }
+        let spacer = gtk::Box::builder().hexpand(true).build();
+        bar.append(&spacer);
+        let cancel = gtk::Button::with_label("Cancel");
+        let go = gtk::Button::new();
+        go.add_css_class("suggested-action");
+        for b in [&cancel, &go] {
+            b.add_css_class("pill");
+            bar.append(b);
+        }
+        self.area.append(&bar);
+
+        let total = items.len();
+        let refresh = {
+            let (checks, go) = (checks.clone(), go.clone());
+            Rc::new(move || {
+                let n = checks.iter().filter(|(_, c)| c.is_active()).count();
+                go.set_label(&if n == total { "Continue with All".to_string() } else { format!("Continue with {n} of {total}") });
+                go.set_sensitive(n > 0);
+            })
+        };
+        refresh();
+        for (_, c) in checks.iter() {
+            let r = refresh.clone();
+            c.connect_toggled(move |_| r());
+        }
+        for (button, state) in [(&all, true), (&clear, false)] {
+            let checks = checks.clone();
+            button.connect_clicked(move |_| {
+                for (_, c) in checks.iter() {
+                    c.set_active(state);
+                }
+            });
+        }
+        {
+            let (a, none) = (self.clone(), none.to_string());
+            cancel.connect_clicked(move |_| a.answer(&none));
+        }
+        {
+            let (a, q, checks) = (self.clone(), q.clone(), checks.clone());
+            go.connect_clicked(move |_| {
+                let chosen: Vec<u32> = checks.iter().filter(|(_, c)| c.is_active()).map(|(n, _)| *n).collect();
+                if let Some(ans) = q.pick_answer(&chosen) {
+                    a.answer(&ans);
+                }
+            });
+        }
+        glib::idle_add_local_once(move || {
+            go.grab_focus();
+        });
+    }
+
+    /// Output stopped on a line that is not one of the known questions.
+    fn unrecognised(&self, line: &str) {
+        self.clear();
+        let l = gtk::Label::builder()
+            .label(format!(
+                "slacker has printed nothing for a few seconds, and its last line is not a question this \
+                 window knows:\n\u{201c}{}\u{201d}\nIf it is waiting for an answer, stop answering: every \
+                 question it asks from now on gets slacker\u{2019}s own default, which never installs, upgrades or removes a package and never writes a setting.",
+                line.trim()
+            ))
+            .xalign(0.0)
+            .wrap(true)
+            .build();
+        l.add_css_class("dim-label");
+        let stop = gtk::Button::with_label("Stop Answering");
+        stop.add_css_class("pill");
+        stop.set_halign(gtk::Align::End);
+        let a = self.clone();
+        stop.connect_clicked(move |_| {
+            a.clear();
+            a.input.close();
+        });
+        self.area.append(&l);
+        self.area.append(&stop);
+        self.area.set_visible(true);
+    }
+}
+
+fn capitalise(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().chain(c).collect(),
+        None => String::new(),
+    }
 }
 
 fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'static) {
@@ -129,6 +359,13 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
     status_row.append(&state_icon);
     status_row.append(&state);
 
+    let area = gtk::Box::builder()
+        .orientation(gtk::Orientation::Vertical)
+        .spacing(10)
+        .visible(false)
+        .build();
+    area.add_css_class("question");
+
     let close = gtk::Button::with_label("Close");
     close.add_css_class("pill");
     close.set_sensitive(false);
@@ -140,6 +377,7 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
     body.add_css_class("tx-body");
     body.append(&status_row);
     body.append(&terminal_view(&buffer));
+    body.append(&area);
 
     let header = adw::HeaderBar::builder()
         .show_end_title_buttons(false)
@@ -153,7 +391,7 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
     let dialog = adw::Dialog::builder()
         .title(&action.title)
         .content_width(980)
-        .content_height(660)
+        .content_height(700)
         .can_close(false)
         .child(&view)
         .build();
@@ -165,326 +403,115 @@ fn transaction(ctx: &Ctx, action: Action, on_finish: impl FnOnce(&Status) + 'sta
     }
     dialog.present(Some(&ctx.window));
 
-    let started = Rc::new(std::cell::Cell::new(false));
     let feed = Feed::new(&buffer);
+    feed.line(&format!("$ {}", ctx.runner.argv(&action.spec).join(" ")));
+
+    let input = Input::new();
+    let asker = Asker {
+        input: input.clone(),
+        area: area.clone(),
+        state: state.clone(),
+        destructive: action.destructive,
+        showing: Rc::default(),
+    };
+    // Finished lines, for the options and items printed above a question.
+    let lines: Rc<RefCell<Vec<String>>> = Rc::default();
+    // Bumped on every piece of output; a quiet-timer that finds it changed
+    // knows output resumed.
+    let generation = Rc::new(Cell::new(0u64));
+    let started = Rc::new(Cell::new(false));
+
     let privilege = action.spec.privilege;
-    let (st, s) = (state.clone(), started.clone());
     let (ctx2, title) = (ctx.clone(), action.title.clone());
-    ctx.runner.run(
-        action.spec,
-        move |text, kind| {
-            if !s.replace(true) {
-                st.set_text("Running\u{2026}");
+    let on_output = {
+        let (asker, lines, generation, started, state) =
+            (asker.clone(), lines.clone(), generation.clone(), started.clone(), state.clone());
+        move |text: &str, kind: Chunk| {
+            if !started.replace(true) {
+                state.set_text("Running\u{2026}");
             }
             feed.push(text, kind);
-        },
-        move |status| {
-            spinner.set_visible(false);
-            state_icon.set_visible(true);
-            let message = describe(&status, privilege);
-            let (icon_name, class) = match status.code() {
-                Some(0) => ("object-select-symbolic", "success"),
-                Some(20 | 50 | 100) => ("dialog-information-symbolic", "accent"),
-                Some(126) => ("dialog-information-symbolic", "dim-label"),
-                _ => ("dialog-error-symbolic", "error"),
-            };
-            state_icon.set_icon_name(Some(icon_name));
-            state_icon.add_css_class(class);
-            state.set_text(&message);
-            if buffer.char_count() == 0 {
-                append(&buffer, "(no output)");
+            let now = generation.get() + 1;
+            generation.set(now);
+            match kind {
+                Chunk::Line => {
+                    let mut l = lines.borrow_mut();
+                    l.extend(text.split('\n').map(str::to_string));
+                    let excess = l.len().saturating_sub(CONTEXT_LINES);
+                    l.drain(..excess);
+                }
+                Chunk::Progress => {
+                    let before = lines.borrow();
+                    let before: Vec<&str> = before.iter().map(String::as_str).collect();
+                    match prompt::detect(&before, text) {
+                        Some(q) => asker.ask(q),
+                        None if asker.input.is_open() && asker.showing.borrow().is_none() => {
+                            // Not a known question — perhaps a counter, perhaps
+                            // a question from a newer slacker. Offer a way out
+                            // only if nothing follows it for a while.
+                            let (a, g, line) = (asker.clone(), generation.clone(), text.to_string());
+                            glib::timeout_add_local_once(QUIET, move || {
+                                if g.get() == now && a.input.is_open() && a.showing.borrow().is_none() {
+                                    a.unrecognised(&line);
+                                }
+                            });
+                        }
+                        None => {}
+                    }
+                }
             }
-            dialog.set_can_close(true);
-            close.set_sensitive(true);
-            close.add_css_class("suggested-action");
-            close.grab_focus();
-            ctx2.toast(&format!("{title}: {message}"));
-            on_finish(&status);
-        },
-    );
-}
+        }
+    };
 
-/// What a preview run said about the change.
-pub enum Verdict {
-    /// slacker is ready to write it.
-    Ready,
-    /// slacker flagged it; applying needs an explicit override (button label).
-    Override(&'static str),
-    /// Nothing would change.
-    Nothing,
-    /// slacker refused the change or the output was not understood.
-    Failed,
-}
-
-pub struct Previewed {
-    /// Same command without `--yes`: prints the plan and writes nothing.
-    pub preview: Spec,
-    pub action: Action,
-    pub judge: fn(&str) -> Verdict,
-}
-
-/// The preview output without the unanswered prompt and its abort line.
-fn preview_text(text: &str) -> String {
-    text.lines()
-        .filter(|l| !l.contains("[y/N]") && l.trim() != "aborted \u{2014} nothing changed")
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim()
-        .to_string()
-}
-
-/// Runs the preview, shows slacker's own description of the change, and
-/// applies it only after the user agrees.
-pub fn run_previewed(ctx: &Ctx, p: Previewed, on_finish: impl FnOnce(&Status) + 'static) {
-    ctx.toast("Asking slacker what would change\u{2026}");
-    let ctx2 = ctx.clone();
-    ctx.runner.capture(p.preview.clone(), move |status, text| {
-        // Present from idle, once the runner has finished with this command
-        // and re-enabled its buttons; a dialog presented from inside the
-        // completion callback does not get keyboard focus.
-        glib::idle_add_local_once(move || show_preview(&ctx2, p, status, text, on_finish));
-    });
-}
-
-fn show_preview(
-    ctx2: &Ctx,
-    p: Previewed,
-    status: Status,
-    text: String,
-    on_finish: impl FnOnce(&Status) + 'static,
-) {
-    {
-        let verdict = if status.answered() { (p.judge)(&text) } else { Verdict::Failed };
-        let shown = preview_text(&text);
-        let command = ctx2.runner.argv(&p.action.spec).join(" ");
-
-        let body = match &verdict {
-            Verdict::Ready => "slacker checked this change. Nothing has been written yet.".to_string(),
-            Verdict::Override(_) => {
-                "slacker thinks this may be a mistake. Nothing has been written yet.".to_string()
-            }
-            Verdict::Nothing => "There is nothing to change.".to_string(),
-            // Authorization or start-up problems are described as such;
-            // anything else is slacker refusing, and its message is below.
-            Verdict::Failed if matches!(status, Status::Exited(126 | 127) | Status::SpawnFailed(_)) => {
-                describe(&status, p.preview.privilege)
-            }
-            Verdict::Failed => "slacker did not accept this change.".to_string(),
+    ctx.runner.run_answering(action.spec, &input, on_output, move |status| {
+        generation.set(generation.get() + 1);
+        asker.clear();
+        spinner.set_visible(false);
+        state_icon.set_visible(true);
+        let message = describe(&status, privilege);
+        let (icon_name, class) = match status.code() {
+            Some(0) => ("object-select-symbolic", "success"),
+            Some(20 | 50 | 100) => ("dialog-information-symbolic", "accent"),
+            Some(126) => ("dialog-information-symbolic", "dim-label"),
+            _ => ("dialog-error-symbolic", "error"),
         };
-        let dialog = adw::AlertDialog::builder()
-            .heading(&p.action.title)
-            .body(body)
-            .build();
-
-        let extra = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        if !shown.is_empty() {
-            let l = gtk::Label::builder()
-                .label(&shown)
-                .wrap(true)
-                .wrap_mode(gtk::pango::WrapMode::WordChar)
-                .selectable(true)
-                .xalign(0.0)
-                .build();
-            l.add_css_class("command-line");
-            l.set_wrap(false);
-            // Selectable with the mouse; never the initial focus, so it does
-            // not open fully selected.
-            l.set_focusable(false);
-            // Long plans scroll instead of squeezing the dialog.
-            // The dialog itself cannot be given a width (AdwAlertDialog has no
-            // usable content width), so the plan's own box asks for the room:
-            // one package per line, scrolling instead of wrapping.
-            let scroller = gtk::ScrolledWindow::builder()
-                .child(&l)
-                .width_request(700)
-                .min_content_height(240)
-                .max_content_height(420)
-                .hscrollbar_policy(gtk::PolicyType::Automatic)
-                .vscrollbar_policy(gtk::PolicyType::Automatic)
-                .build();
-            extra.append(&scroller);
+        state_icon.set_icon_name(Some(icon_name));
+        state_icon.add_css_class(class);
+        state.set_text(&message);
+        if buffer.line_count() <= 1 {
+            append(&buffer, "(no output)");
         }
-        match verdict {
-            Verdict::Ready | Verdict::Override(_) => {
-                let c = gtk::Label::builder()
-                    .label(&command)
-                    .wrap(true)
-                    .wrap_mode(gtk::pango::WrapMode::WordChar)
-                    .selectable(true)
-                    .xalign(0.0)
-                    .build();
-                c.add_css_class("command-line");
-                c.add_css_class("dim-label");
-                c.set_focusable(false);
-                extra.append(&c);
-                let (label, look) = match verdict {
-                    Verdict::Override(l) => (l.to_string(), adw::ResponseAppearance::Destructive),
-                    _ => (
-                        p.action.verb.clone(),
-                        if p.action.destructive {
-                            adw::ResponseAppearance::Destructive
-                        } else {
-                            adw::ResponseAppearance::Suggested
-                        },
-                    ),
-                };
-                dialog.add_responses(&[("cancel", "Cancel"), ("run", &label)]);
-                dialog.set_response_appearance("run", look);
-                dialog.set_close_response("cancel");
-                dialog.set_default_response(Some("cancel"));
-            }
-            Verdict::Nothing | Verdict::Failed => {
-                dialog.add_responses(&[("close", "Close")]);
-                dialog.set_close_response("close");
-                dialog.set_default_response(Some("close"));
-            }
-        }
-        dialog.set_extra_child(Some(&extra));
-
-        let ctx3 = ctx2.clone();
-        after_choice(&dialog, "run", &ctx2.window, move || transaction(&ctx3, p.action, on_finish));
-        // Put keyboard focus on the default button (Cancel, or Close when
-        // there is nothing to apply), so Enter and Escape work at once.
-        let default_label = if dialog.has_response("run") { "Cancel" } else { "Close" };
-        let d = dialog.clone();
+        dialog.set_can_close(true);
+        close.set_sensitive(true);
+        close.add_css_class("suggested-action");
+        // From idle: when the last answer ends the command at once, the
+        // answered button is still being taken away and GTK would move the
+        // focus again after this.
+        let c = close.clone();
         glib::idle_add_local_once(move || {
-            if let Some(b) = find_button(d.upcast_ref(), default_label) {
-                b.grab_focus();
-            }
+            c.grab_focus();
         });
-    }
-}
-
-/// Judges `slacker frozen RULE` run without `--yes`.
-pub fn judge_freeze(text: &str) -> Verdict {
-    if text.contains("Nothing new to add") {
-        Verdict::Nothing
-    } else if text.contains("look like a mistake") {
-        Verdict::Override("Freeze anyway")
-    } else if text.contains("About to add") {
-        Verdict::Ready
-    } else {
-        Verdict::Failed
-    }
-}
-
-/// Judges `slacker pin REPO:PKG` run without `--yes`.
-pub fn judge_pin(text: &str) -> Verdict {
-    if text.contains("Already pinned:") {
-        Verdict::Nothing
-    } else if text.contains("About to pin") {
-        if text.contains("warning:") {
-            Verdict::Override("Pin anyway")
-        } else {
-            Verdict::Ready
-        }
-    } else {
-        Verdict::Failed
-    }
-}
-
-/// Judges `install-new --dry-run` and `upgrade-all --dry-run`.
-///
-/// A plan that conflicts with installed packages needs the override: asked
-/// interactively slacker offers continue / remove / abort, but with `--yes`
-/// it warns and carries on, leaving the conflicting packages in place. The
-/// button has to say so.
-pub fn judge_plan(text: &str) -> Verdict {
-    if text.contains("ATTENTION:") && text.contains("conflict") {
-        Verdict::Override("Continue anyway")
-    } else if text.contains("(dry-run: nothing changed)") {
-        Verdict::Ready
-    } else if text.contains("No new packages to install")
-        || text.contains("Nothing to upgrade")
-        || text.contains("Nothing selected")
-    {
-        Verdict::Nothing
-    } else {
-        Verdict::Failed
-    }
-}
-
-/// Judges `slacker pri-repo PRIORITY NAME` run without `--yes`. A taken
-/// priority or an unknown repo is an error exit, reported as Failed with
-/// slacker's own message.
-pub fn judge_priority(text: &str) -> Verdict {
-    if text.contains("nothing to change") {
-        Verdict::Nothing
-    } else if text.contains("About to change") {
-        Verdict::Ready
-    } else {
-        Verdict::Failed
-    }
+        ctx2.toast(&format!("{title}: {message}"));
+        on_finish(&status);
+    });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    // Built from the println! calls in cmd_frozen / cmd_pin, with stdin closed.
-    const FREEZE_READY: &str = "About to add 1 blacklist rule(s):\n  1. \"kde/\"  \u{2192}  series 'kde' in all repos\nAdd these to the blacklist? [y/N] aborted \u{2014} nothing changed\n";
-    const FREEZE_WARN: &str = "1 rule(s) look like a mistake:\n  \"@alienbobb vlc\"       no active repo 'alienbobb'\n  active repos: slackware, alienbob\ndeclare them anyway? [y/N] aborted \u{2014} nothing changed\n";
-    const FREEZE_SAME: &str = "already frozen, skipping: kde/\nNothing new to add \u{2014} every given rule is already frozen.\n";
-    const PIN_READY: &str = "About to pin (only source for 'vlc', ignoring priority):\n  @alienbob 100% vlc\nwrite it to the blacklist? [y/N] aborted \u{2014} nothing changed\n";
-    const PIN_FROZEN: &str = "warning: 'vlc' is also frozen (blacklisted) \u{2014} the freeze wins, so the pin will have no effect until you `unfrozen` it\nAbout to pin (only source for 'vlc', ignoring priority):\n  @alienbob 100% vlc\nwrite it to the blacklist? [y/N] aborted \u{2014} nothing changed\n";
-
     #[test]
-    fn freeze_verdicts() {
-        assert!(matches!(judge_freeze(FREEZE_READY), Verdict::Ready));
-        assert!(matches!(judge_freeze(FREEZE_WARN), Verdict::Override(_)));
-        assert!(matches!(judge_freeze(FREEZE_SAME), Verdict::Nothing));
-        assert!(matches!(judge_freeze("slacker: error: 1 problem(s), nothing changed:"), Verdict::Failed));
+    fn a_refused_or_failed_start_changed_nothing() {
+        assert!(!may_have_changed(&Status::Exited(126)));
+        assert!(!may_have_changed(&Status::Exited(127)));
+        assert!(!may_have_changed(&Status::SpawnFailed("x".into())));
+        assert!(may_have_changed(&Status::Exited(0)));
+        assert!(may_have_changed(&Status::Exited(1)));
     }
 
     #[test]
-    fn pin_verdicts() {
-        assert!(matches!(judge_pin(PIN_READY), Verdict::Ready));
-        assert!(matches!(judge_pin(PIN_FROZEN), Verdict::Override(_)));
-        assert!(matches!(judge_pin("Already pinned: vlc -> alienbob\n"), Verdict::Nothing));
-        assert!(matches!(judge_pin("slacker: error: no active repo 'x'"), Verdict::Failed));
-    }
-
-    #[test]
-    fn plan_verdicts() {
-        assert!(matches!(
-            judge_plan("Upgrade (2):\n  glibc  2.44-4 \u{2192} 2.44-5\n(dry-run: nothing changed)\n"),
-            Verdict::Ready
-        ));
-        assert!(matches!(judge_plan("No new packages to install.\n"), Verdict::Nothing));
-        assert!(matches!(judge_plan("Nothing to upgrade.\n"), Verdict::Nothing));
-        assert!(matches!(judge_plan("slacker: error: could not read metadata"), Verdict::Failed));
-    }
-
-    #[test]
-    fn a_conflicting_plan_needs_the_override() {
-        // report_conflicts() in slacker, shown inside a --dry-run plan.
-        let text = "Install (1):\n  foo  1.0-x86_64-1  [conraid]\n  \
-                    ATTENTION: 1 package conflicts with what is already installed:\n    \
-                    foo conflicts with the installed bar-2.0-x86_64-1\n\
-                    (dry-run: nothing changed)\n";
-        assert!(matches!(judge_plan(text), Verdict::Override("Continue anyway")));
-    }
-
-    #[test]
-    fn priority_verdicts() {
-        // From cmd_pri_repo's println! calls.
-        let ready = "About to change 'alienbob' priority: 60 \u{2192} 61\nWrite it to the repos file? [y/N] aborted \u{2014} nothing changed\n";
-        assert!(matches!(judge_priority(ready), Verdict::Ready));
-        assert!(matches!(
-            judge_priority("'alienbob' is already at priority 60 \u{2014} nothing to change.\n"),
-            Verdict::Nothing
-        ));
-        assert!(matches!(
-            judge_priority("slacker: error: priority 79 is already used by repo 'lngn' \u{2014} pick another value"),
-            Verdict::Failed
-        ));
-    }
-
-    #[test]
-    fn preview_drops_the_unanswered_prompt() {
-        let t = preview_text(FREEZE_READY);
-        assert!(!t.contains("[y/N]"));
-        assert!(!t.contains("aborted"));
-        assert!(t.starts_with("About to add 1 blacklist rule(s):"));
+    fn option_labels_read_as_buttons() {
+        assert_eq!(capitalise("skip-all"), "Skip-all");
+        assert_eq!(capitalise(""), "");
     }
 }

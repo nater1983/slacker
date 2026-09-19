@@ -77,13 +77,61 @@ pub fn describe(status: &Status, privilege: Privilege) -> String {
     }
 }
 
-type OnOutput = Box<dyn Fn(&str, Chunk)>;
+type OnOutput = Rc<dyn Fn(&str, Chunk)>;
 type OnDone = Box<dyn FnOnce(Status)>;
 
 struct Job {
     spec: Spec,
     on_output: OnOutput,
     on_done: OnDone,
+    /// Present when someone will answer the command's questions; without it
+    /// stdin is closed at once and slacker takes its own default answers.
+    input: Option<Input>,
+}
+
+/// The stdin of a running command, for answering the questions slacker asks.
+/// The caller creates it; the runner connects it once the command actually
+/// starts (it may wait in the queue first) and disconnects it when the
+/// command ends.
+#[derive(Clone, Default)]
+pub struct Input(Rc<RefCell<Option<Live>>>);
+
+struct Live {
+    stdin: gio::OutputStream,
+    /// The unfinished line: the question slacker is waiting on.
+    pending: Rc<RefCell<Vec<u8>>>,
+    /// Writes a finished line to the caller and to the log.
+    echo: Rc<dyn Fn(&str)>,
+}
+
+impl Input {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Answers the question slacker is waiting on. As on a terminal, the
+    /// answer appears at the end of the question's line, which it finishes.
+    pub fn send(&self, answer: &str) -> bool {
+        let live = self.0.borrow().as_ref().map(|l| (l.stdin.clone(), l.pending.clone(), l.echo.clone()));
+        let Some((stdin, pending, echo)) = live else { return false };
+        let question = std::mem::take(&mut *pending.borrow_mut());
+        echo(&format!("{}{answer}", clean(&question)));
+        stdin
+            .write_all(format!("{answer}\n").as_bytes(), gio::Cancellable::NONE)
+            .is_ok()
+    }
+
+    /// No more answers: slacker reads end of input, and every question it
+    /// still asks gets its own default (No, abort, keep).
+    pub fn close(&self) {
+        if let Some(live) = self.0.borrow_mut().take() {
+            let _ = live.stdin.close(gio::Cancellable::NONE);
+        }
+    }
+
+    pub fn is_open(&self) -> bool {
+        self.0.borrow().is_some()
+    }
 }
 
 #[derive(Clone)]
@@ -147,18 +195,30 @@ impl Runner {
         }
     }
 
-    /// Queues a command; output arrives in chunks of whole lines.
+    /// Queues a command whose questions nobody answers: its stdin is closed
+    /// at once, so slacker takes the default for anything it asks.
     pub fn run(
         &self,
         spec: Spec,
         on_output: impl Fn(&str, Chunk) + 'static,
         on_done: impl FnOnce(Status) + 'static,
     ) {
-        self.0.queue.borrow_mut().push_back(Job {
-            spec,
-            on_output: Box::new(on_output),
-            on_done: Box::new(on_done),
-        });
+        self.queue(spec, None, Rc::new(on_output), Box::new(on_done));
+    }
+
+    /// Queues a command and keeps its stdin open for `input` to answer.
+    pub fn run_answering(
+        &self,
+        spec: Spec,
+        input: &Input,
+        on_output: impl Fn(&str, Chunk) + 'static,
+        on_done: impl FnOnce(Status) + 'static,
+    ) {
+        self.queue(spec, Some(input.clone()), Rc::new(on_output), Box::new(on_done));
+    }
+
+    fn queue(&self, spec: Spec, input: Option<Input>, on_output: OnOutput, on_done: OnDone) {
+        self.0.queue.borrow_mut().push_back(Job { spec, on_output, on_done, input });
         if !self.0.busy.get() {
             self.next();
         }
@@ -198,14 +258,14 @@ impl Runner {
 
         let this = self.clone();
         glib::spawn_future_local(async move {
-            let status = this.execute(&argv, &*job.on_output).await;
+            let status = this.execute(&argv, job.on_output, job.input).await;
             this.log_line(&format!("[{}]\n", describe(&status, job.spec.privilege)));
             (job.on_done)(status);
             this.next();
         });
     }
 
-    async fn execute(&self, argv: &[String], on_output: &dyn Fn(&str, Chunk)) -> Status {
+    async fn execute(&self, argv: &[String], on_output: OnOutput, input: Option<Input>) -> Status {
         let launcher = gio::SubprocessLauncher::new(
             gio::SubprocessFlags::STDIN_PIPE
                 | gio::SubprocessFlags::STDOUT_PIPE
@@ -220,32 +280,64 @@ impl Runner {
             Err(e) => return Status::SpawnFailed(e.to_string()),
         };
 
-        // Nobody answers prompts: slacker sees end-of-file on stdin at once
-        // instead of reading from whatever terminal started the GUI.
-        if let Some(stdin) = proc.stdin_pipe() {
-            let _ = stdin.close(gio::Cancellable::NONE);
+        // The unfinished last line, shared with the timer below and with
+        // `Input::send`, which finishes it with the answer.
+        let pending: Rc<RefCell<Vec<u8>>> = Rc::default();
+        let timer: Rc<RefCell<Option<glib::SourceId>>> = Rc::default();
+
+        match (&input, proc.stdin_pipe()) {
+            (Some(inp), Some(stdin)) => {
+                let (this, out) = (self.clone(), on_output.clone());
+                *inp.0.borrow_mut() = Some(Live {
+                    stdin,
+                    pending: pending.clone(),
+                    echo: Rc::new(move |line: &str| {
+                        out(line, Chunk::Line);
+                        this.0.log.push(line, Chunk::Line);
+                    }),
+                });
+            }
+            // Nobody will answer: slacker sees end of input at once instead
+            // of reading from whatever terminal started the GUI.
+            (None, Some(stdin)) => {
+                let _ = stdin.close(gio::Cancellable::NONE);
+            }
+            (_, None) => {}
         }
 
         if let Some(stdout) = proc.stdout_pipe() {
-            let mut pending: Vec<u8> = Vec::new();
-            let mut shown = std::time::Instant::now();
             loop {
                 match stdout.read_bytes_future(READ_CHUNK, glib::Priority::DEFAULT).await {
                     Ok(bytes) if bytes.is_empty() => break,
                     Ok(bytes) => {
-                        pending.extend_from_slice(&bytes);
-                        if let Some(pos) = pending.iter().rposition(|&b| b == b'\n') {
-                            let rest = pending.split_off(pos + 1);
-                            let complete = std::mem::replace(&mut pending, rest);
-                            self.emit(&complete, on_output, Chunk::Line);
-                            shown = std::time::Instant::now();
+                        let complete = {
+                            let mut p = pending.borrow_mut();
+                            p.extend_from_slice(&bytes);
+                            p.iter().rposition(|&b| b == b'\n').map(|pos| {
+                                let rest = p.split_off(pos + 1);
+                                std::mem::replace(&mut *p, rest)
+                            })
+                        };
+                        if let Some(c) = complete {
+                            self.emit(&c, &*on_output, Chunk::Line);
                         }
-                        // What is left has no newline yet. A download counter
-                        // never sends one, so show it as it changes rather
-                        // than letting the window look frozen.
-                        if !pending.is_empty() && shown.elapsed() >= PROGRESS_EVERY {
-                            self.emit(&pending, on_output, Chunk::Progress);
-                            shown = std::time::Instant::now();
+                        // What is left has no newline: a download counter
+                        // being redrawn, or a question slacker is now
+                        // waiting on. Either way nothing more may arrive
+                        // until it changes or is answered, so it is shown
+                        // from a timer rather than on the next read.
+                        if !pending.borrow().is_empty() && timer.borrow().is_none() {
+                            let (this, out, p, t) =
+                                (self.clone(), on_output.clone(), pending.clone(), timer.clone());
+                            let id = glib::timeout_add_local_once(PROGRESS_EVERY, move || {
+                                // Fired: the source is gone, so only forget it.
+                                t.borrow_mut().take();
+                                let bytes = p.borrow().clone();
+                                if !bytes.is_empty() {
+                                    this.emit(&bytes, &*out, Chunk::Progress);
+                                }
+                            });
+                            *timer.borrow_mut() = Some(id);
                         }
                     }
                     Err(e) => {
@@ -254,10 +346,18 @@ impl Runner {
                     }
                 }
             }
-            if !pending.is_empty() {
-                // A last line the command never terminated with a newline.
-                self.emit(&pending, on_output, Chunk::Line);
+            if let Some(id) = timer.borrow_mut().take() {
+                id.remove();
             }
+            let rest = std::mem::take(&mut *pending.borrow_mut());
+            if !rest.is_empty() {
+                // A last line the command never terminated with a newline.
+                self.emit(&rest, &*on_output, Chunk::Line);
+            }
+        }
+        // The command is done reading; no answer can reach it any more.
+        if let Some(inp) = &input {
+            inp.close();
         }
 
         if let Err(e) = proc.wait_future().await {

@@ -6,7 +6,7 @@ use adw::prelude::*;
 
 use super::Page;
 use crate::commands::{self, Spec};
-use crate::confirm::{self, Action, Previewed};
+use crate::confirm::{self, Action};
 use crate::ctx::Ctx;
 use crate::parse::updates::{self, State};
 use crate::runner::Status;
@@ -88,7 +88,6 @@ pub fn page(ctx: &Ctx) -> Page {
                       subtitle: &str,
                       verb: &str,
                       spec: fn() -> Spec,
-                      preview: Option<fn() -> Spec>,
                       primary: bool| {
         let row = widgets::row(title, subtitle);
         row.add_prefix(&widgets::priority_badge(step, primary));
@@ -104,16 +103,9 @@ pub fn page(ctx: &Ctx) -> Page {
                 verb: verb2.clone(),
                 destructive: false,
             };
-            match preview {
-                // slacker lists exactly what it would install or upgrade
-                // before anything is written.
-                Some(p) => confirm::run_previewed(
-                    &ctx2,
-                    Previewed { preview: p(), action, judge: confirm::judge_plan },
-                    move |st| after3(st, &label),
-                ),
-                None => confirm::run_as_root(&ctx2, action, move |st| after3(st, &label)),
-            }
+            // slacker lists its plan and asks before anything is written;
+            // the questions come up in the transaction window.
+            confirm::run_as_root(&ctx2, action, move |st| after3(st, &label));
         });
         row.add_suffix(&b);
         row.set_activatable_widget(Some(&b));
@@ -125,7 +117,6 @@ pub fn page(ctx: &Ctx) -> Page {
         "Fetch what the repositories have published. Nothing is installed, removed or upgraded by this step.",
         "Update",
         commands::update,
-        None,
         false,
     );
     add_action(
@@ -134,7 +125,6 @@ pub fn page(ctx: &Ctx) -> Page {
         "Packages the official repositories added and this system does not have. slacker lists them before installing.",
         "Install new",
         commands::install_new,
-        Some(commands::install_new_preview),
         false,
     );
     add_action(
@@ -143,7 +133,6 @@ pub fn page(ctx: &Ctx) -> Page {
         "Installed packages that have a newer build. slacker lists them before upgrading.",
         "Upgrade all",
         commands::upgrade_all,
-        Some(commands::upgrade_all_preview),
         true,
     );
 
