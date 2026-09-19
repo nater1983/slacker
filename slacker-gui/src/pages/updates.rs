@@ -187,7 +187,7 @@ fn summary_card(status: &Status, parsed: &updates::Updates) -> gtk::Box {
             "object-select-symbolic",
             "The package lists are current".to_string(),
             format!(
-                "{} repositories checked. This says nothing about installed packages: install-new (2) and upgrade-all (3) show what is/if still pending.",
+                "{} repositories checked. This says nothing about installed packages: install-new (2) and upgrade-all (3) show whether anything is still pending.",
                 parsed.repos.len()
             ),
         )
