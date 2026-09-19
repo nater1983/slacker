@@ -1,3 +1,5 @@
+Version Beta 0.12.0
+=====
 - SEMANTIC CHANGES: We don't like this but it has to be done...
     - So, slacker in the binaries produced by this repository is moving from `/usr/local/sbin` which has been in `/usr/bin/` until now.
       There are many reasons and against my will. But it has to go there instead of `/usr/local/bin` so that we can prepare it
@@ -18,6 +20,7 @@
       and in few days will be a ready and stable `slacker-16.0`
 - Update: Rearrange folders and repository structure:
     - For obvious reasons, there was a major rearrangement...
+- Update: wiki pages.
 ---
 
 Version Beta 0.11.9
