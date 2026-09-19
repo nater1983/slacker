@@ -191,7 +191,11 @@ install -Dm644 data/nl.slackware.forge.rizitis.SlackerGui.desktop \
 install -Dm644 data/nl.slackware.forge.rizitis.slacker.policy \
   $PKG/usr/share/polkit-1/actions/nl.slackware.forge.rizitis.slacker.policy
 mkdir -p $PKG/usr/share/icons
-cp -a data/icons/hicolor $PKG/usr/share/icons/
+# install, not cp -a: cp -a would keep the owner of the source tree
+# (the user who unpacked it) and sbopkglint rejects uid/gid >= 1000.
+( cd data/icons && find hicolor -type f ) | while read -r f; do
+  install -Dm644 -o root -g root data/icons/"$f" $PKG/usr/share/icons/"$f"
+done
 
 # Copy the slack-desc and a custom doinst.sh
 mkdir -p $PKG/install

@@ -55,7 +55,16 @@ fn main() -> glib::ExitCode {
         adw::StyleManager::default().set_color_scheme(adw::ColorScheme::PreferDark);
         load_style();
     });
-    app.connect_activate(window::build);
+    // GApplication already makes the app unique per session: a second
+    // `slacker-gui` (desktop entry, terminal, another workspace) finds the
+    // running one on the session bus, asks it to activate, and exits. So
+    // activation only builds the window the first time; after that it
+    // brings the existing one forward (the window manager switches to its
+    // workspace, or moves it here, as it is set up to do).
+    app.connect_activate(|app| match app.active_window() {
+        Some(w) => w.present(),
+        None => window::build(app),
+    });
     app.run()
 }
 
