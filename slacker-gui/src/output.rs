@@ -180,13 +180,14 @@ pub fn trim(buffer: &gtk::TextBuffer, max_lines: i32) {
     buffer.delete(&mut start, &mut cut);
 }
 
-/// A read-only monospace view on `buffer` that follows new output.
-///
-/// The view owns what it adds to the buffer: the runner's log outlives every
-/// dialog that shows it, so the scroll handler and its mark are removed when
-/// the view goes away. Otherwise each reopening would leave another dead view
-/// attached to the buffer, scrolled on every line of output for ever after.
-pub fn terminal_view(buffer: &gtk::TextBuffer) -> gtk::ScrolledWindow {
+/// A read-only monospace view on `buffer` that stays at the top, for text
+/// read from its first line on, like a ChangeLog (newest entry first). Text
+/// arriving later is added below without moving the view.
+pub fn document_view(buffer: &gtk::TextBuffer) -> gtk::ScrolledWindow {
+    text_card(buffer).0
+}
+
+fn text_card(buffer: &gtk::TextBuffer) -> (gtk::ScrolledWindow, gtk::TextView) {
     let view = gtk::TextView::builder()
         .buffer(buffer)
         .editable(false)
@@ -205,6 +206,17 @@ pub fn terminal_view(buffer: &gtk::TextBuffer) -> gtk::ScrolledWindow {
         .vexpand(true)
         .build();
     scroller.add_css_class("terminal-card");
+    (scroller, view)
+}
+
+/// A read-only monospace view on `buffer` that follows new output.
+///
+/// The view owns what it adds to the buffer: the runner's log outlives every
+/// dialog that shows it, so the scroll handler and its mark are removed when
+/// the view goes away. Otherwise each reopening would leave another dead view
+/// attached to the buffer, scrolled on every line of output for ever after.
+pub fn terminal_view(buffer: &gtk::TextBuffer) -> gtk::ScrolledWindow {
+    let (scroller, view) = text_card(buffer);
 
     // Follow new output, and start at the end when opened on an old log.
     let mark = buffer.create_mark(None, &buffer.end_iter(), false);

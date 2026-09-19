@@ -112,7 +112,8 @@ fn load(ctx: &Ctx, area: &gtk::Box, repo: Option<String>) {
         move |text, kind| {
             if !s.replace(true) {
                 widgets::clear(&area2);
-                area2.append(&output::terminal_view(&b));
+                // Read from the top, as `slacker show-changelog | less` would be.
+                area2.append(&output::document_view(&b));
             }
             // A ChangeLog is plain text; a redrawn line would only be the
             // fetch counter, which belongs nowhere in the page.
