@@ -67,7 +67,7 @@ slacker upgrade-all
 
 | | |
 |---|---|
-| [Installation]((https://forge.slackware.nl/rizitis/slacker/wiki/Installation)) | binary package and building from source |
+| [Installation](https://forge.slackware.nl/rizitis/slacker/wiki/Installation) | binary package and building from source |
 | [Quick Start](https://forge.slackware.nl/rizitis/slacker/wiki/Quick-Start) | first-time setup, step by step |
 | [Configuration](https://forge.slackware.nl/rizitis/slacker/wiki/Configuration) | `slacker.conf`, `mirrors`, `repos`, `blacklist` |
 | [Repositories and Priority](https://forge.slackware.nl/rizitis/slacker/wiki/Repositories-and-Priority) | the priority model, `subtree`, pins, `@` selectors |
