@@ -8376,14 +8376,17 @@ fn hilite_keys(text: &str) -> String {
 /// They hold settings unique to this machine, and the `etc` and
 /// `network-scripts` packages ship a `.new` for each on every upgrade — so they
 /// turn up in ordinary `-current` updates, not only in a dist-upgrade.
-/// Patrick's own 15.0→16.0 script skips exactly these five.
+/// Patrick's own 15.0→16.0 script skips the first five. `rc.local_shutdown` is
+/// slacker's addition: it is the shutdown-side twin of `rc.local` (run by
+/// `rc.6`), holds the same kind of user-written commands, and deserves the same
+/// protection whether or not a package ever ships a `.new` for it.
 ///
 /// The reason is carried per file rather than described in one sentence,
-/// because the five are NOT one kind of thing: three are the account database,
-/// one is the network bring-up, and `rc.local` is the user's own start-up
-/// commands. Saying "accounts and network setup" about `rc.local` is simply
-/// untrue, and a warning the reader can see is wrong is a warning they stop
-/// reading.
+/// because these are NOT one kind of thing: three are the account database,
+/// one is the network bring-up, and `rc.local` / `rc.local_shutdown` are the
+/// user's own start-up and shutdown commands. Saying "accounts and network
+/// setup" about either of those is simply untrue, and a warning the reader can
+/// see is wrong is a warning they stop reading.
 ///
 /// They are still reported and can be merged by hand (or with `M` in the
 /// per-file review, which edits rather than replaces).
@@ -8398,6 +8401,10 @@ const PROTECTED_CONFIGS: &[(&str, &str)] = &[
     (
         "/etc/rc.d/rc.local",
         "your own start-up commands — replacing it discards everything you put there",
+    ),
+    (
+        "/etc/rc.d/rc.local_shutdown",
+        "your own shutdown commands — replacing it discards everything you put there",
     ),
 ];
 
@@ -8653,10 +8660,10 @@ fn cmd_new_config(cli: &Cli, dist_mode: bool) -> Result<Outcome, String> {
         println!();
         println!("{}", ui::red(&bar));
         println!("{}", ui::red("  WARNING — these files hold settings unique to this machine:"));
-        // The reason comes from the file itself: the five are not one kind of
-        // thing, and a blanket "accounts and network" is plainly wrong for
-        // rc.local — which is exactly the sort of error that teaches a reader to
-        // skip warnings.
+        // The reason comes from the file itself: the protected files are not one
+        // kind of thing, and a blanket "accounts and network" is plainly wrong
+        // for rc.local / rc.local_shutdown — which is exactly the sort of error
+        // that teaches a reader to skip warnings.
         for nc in &protected {
             println!("{}{}", ui::red("    "), ui::white(&nc.target.display().to_string()));
             if let Some(why) = protected_reason(&nc.target) {
@@ -11410,7 +11417,14 @@ mod foundational_tests {
         // so "overwrite all" must never take them: replacing /etc/passwd and
         // /etc/shadow with the stock versions locks the user out, and the .orig
         // backup is useless once login is impossible.
-        for p in ["/etc/passwd", "/etc/shadow", "/etc/group", "/etc/rc.d/rc.inet1.conf", "/etc/rc.d/rc.local"] {
+        for p in [
+            "/etc/passwd",
+            "/etc/shadow",
+            "/etc/group",
+            "/etc/rc.d/rc.inet1.conf",
+            "/etc/rc.d/rc.local",
+            "/etc/rc.d/rc.local_shutdown",
+        ] {
             assert!(is_protected_config(Path::new(p)), "{p} must be protected");
         }
         // Everything else is fair game for an overwrite.
@@ -11421,11 +11435,12 @@ mod foundational_tests {
         // elsewhere is not protected.
         assert!(!is_protected_config(Path::new("/home/user/passwd")));
 
-        // Every exempt file states its OWN reason. The five are not one kind of
+        // Every exempt file states its OWN reason. They are not one kind of
         // thing — three are the account database, one is the network bring-up,
-        // and rc.local is the user's own start-up commands — so a blanket
-        // "accounts and network setup" would be visibly untrue for rc.local, and
-        // a warning a reader can see is wrong is one they stop reading.
+        // and rc.local / rc.local_shutdown are the user's own start-up and
+        // shutdown commands — so a blanket "accounts and network setup" would be
+        // visibly untrue for those two, and a warning a reader can see is wrong
+        // is one they stop reading.
         for (path, why) in PROTECTED_CONFIGS {
             assert!(!why.is_empty(), "{path} needs a reason");
             assert_eq!(protected_reason(Path::new(path)), Some(*why));
@@ -11433,6 +11448,11 @@ mod foundational_tests {
         assert!(protected_reason(Path::new("/etc/rc.d/rc.local"))
             .unwrap()
             .contains("start-up commands"));
+        // The shutdown twin must say shutdown, not start-up: a copy-pasted reason
+        // would be the same kind of visible untruth this table exists to avoid.
+        assert!(protected_reason(Path::new("/etc/rc.d/rc.local_shutdown"))
+            .unwrap()
+            .contains("shutdown commands"));
         assert!(protected_reason(Path::new("/etc/rc.d/rc.inet1.conf"))
             .unwrap()
             .contains("network"));
